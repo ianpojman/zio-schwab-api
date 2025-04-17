@@ -24,6 +24,9 @@ lazy val zioSchwabApi = (project in file("."))
       "dev.zio" %% "zio-config-magnolia" % zioConfigVersion,
       "dev.zio" %% "zio-config-typesafe" % zioConfigVersion,
       "com.typesafe.scala-logging" %% "scala-logging" % "3.9.5",
+      "org.bouncycastle" % "bcpkix-jdk15on" % "1.70",
+
+      "org.shredzone.acme4j" % "acme4j-client" % "3.5.1"
     ),
 
     libraryDependencies ++= Seq(

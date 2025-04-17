@@ -27,44 +27,6 @@ case class TokenResponse(
 object TokenResponse {
   implicit val decoder: JsonDecoder[TokenResponse] = DeriveJsonDecoder.gen[TokenResponse]
 }
-
-/**
- * Configuration for the Schwab API
- */
-case class SchwabApiConfig(
-                            clientId: String,
-                            clientSecret: String,
-                            tokenUrl: String = "https://api.schwabapi.com/v1/oauth/token",
-                            redirectUri: String = "https://127.0.0.1",
-                            authUrl: String = "https://api.schwabapi.com/v1/oauth/authorize",
-                            apiBaseUrl: String = "https://api.schwabapi.com"
-                          )
-
-object SchwabApiConfig {
-  import zio.config.*
-  import zio.config.magnolia.*
-  import zio.config.typesafe.*
-
-  private val configDesc = deriveConfig[SchwabApiConfig]
-
-  val fromEnv: Layer[Config.Error, SchwabApiConfig] =
-    ZLayer.fromZIO(
-      ConfigProvider.envProvider.load(configDesc) // Removed parentheses
-    )
-
-  val fromFile: ZLayer[Any, Throwable, SchwabApiConfig] =
-    ZLayer.fromZIO(
-      ZIO.attempt {
-        val homeDir = sys.props.getOrElse("user.home", "")
-        val configFile = new java.io.File(s"$homeDir/.schwab.conf")
-        ConfigProvider.fromHoconFile(configFile).load(configDesc)
-      }.flatten
-    )
-
-  val live: ZLayer[Any, Throwable, SchwabApiConfig] =
-    fromEnv.orElse(fromFile)
-}
-
 /**
  * Main API client for Schwab
  */
@@ -148,7 +110,7 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
       response  <- client.request(request).provide(ZLayer.succeed(Scope.global))
       _         <- ZIO.logDebug(s"Token response status: ${response.status}")
       bodyStr   <- response.body.asString
-      _         <- ZIO.logTrace(s"Token response body: $bodyStr")
+      _         <- ZIO.logInfo(s"Token response body: $bodyStr")
       tokenResp <- ZIO.fromEither(bodyStr.fromJson[TokenResponse])
         .mapError(err => new RuntimeException(s"Failed to parse token response: $err"))
         .tapError(err => ZIO.logError(s"Failed to parse token response while parsing response body: \n---\n$bodyStr\n---\n$err"))
