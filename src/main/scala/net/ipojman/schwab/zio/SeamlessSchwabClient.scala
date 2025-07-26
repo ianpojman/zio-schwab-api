@@ -63,10 +63,16 @@ class SeamlessSchwabClient(
       
       // Start embedded HTTP server for OAuth callback
       authCompleted <- Promise.make[Throwable, TokenResponse]
-      serverFiber <- startAuthServer(authCompleted).fork
+      serverReady <- Promise.make[Throwable, Unit]
+      serverFiber <- startAuthServer(authCompleted, serverReady).fork
       
-      // Open browser to Schwab auth page
-      authUrl = s"${config.authUrl}?response_type=code&client_id=${config.clientId}&redirect_uri=${config.redirectUri}"
+      // Wait for server to be ready before opening browser
+      _ <- serverReady.await
+        .timeoutFail(new Exception("Server failed to start within 30 seconds"))(30.seconds)
+        .tapError(err => ZIO.logError(s"Server startup error: ${err.getMessage}"))
+      
+      // Open browser to Schwab auth page (no response_type per Schwab support)
+      authUrl = s"${config.authUrl}?client_id=${config.clientId}&redirect_uri=${config.redirectUri}"
       _ <- ZIO.logInfo(s"Opening browser for authentication...")
       _ <- BrowserLauncher.openBrowser(authUrl)
       
@@ -80,7 +86,7 @@ class SeamlessSchwabClient(
     } yield token
   }
   
-  private def startAuthServer(authCompleted: Promise[Throwable, TokenResponse]): Task[Unit] = {
+  private def startAuthServer(authCompleted: Promise[Throwable, TokenResponse], serverReady: Promise[Throwable, Unit]): Task[Unit] = {
     val callbackPath = new URI(config.redirectUri).getPath
     
     // Build the route path dynamically from the callback URL
@@ -116,12 +122,13 @@ class SeamlessSchwabClient(
       }
     
     val uri = new URI(config.redirectUri)
+    val isHttps = uri.getScheme == "https"
     val port = uri.getPort match {
       case -1 => 
         // Extract port from URL if present (e.g., http://localhost:8080/)
         if (uri.getAuthority != null && uri.getAuthority.contains(":")) {
           uri.getAuthority.split(":").last.toInt
-        } else if (config.redirectUri.startsWith("https")) {
+        } else if (isHttps) {
           443
         } else {
           80
@@ -130,13 +137,57 @@ class SeamlessSchwabClient(
     }
     
     for {
-      _ <- ZIO.logInfo(s"Starting OAuth callback server on port $port for path: $callbackPath")
-      _ <- Server.serve(Routes(authRoute).sandbox)
+      _ <- ZIO.logInfo(s"Starting OAuth callback server on port $port for path: $callbackPath (HTTPS: $isHttps)")
+      
+      serverConfig <- if (isHttps) {
+        // Create self-signed certificate for HTTPS on Windows
+        import cert.WindowsSSLSetup
+        WindowsSSLSetup.createSelfSignedCertificate("127.0.0.1")
+          .map(sslSetup => Server.Config.default.port(port).ssl(sslSetup.config))
+          .tapBoth(
+            err => ZIO.logError(s"Failed to create SSL certificate: ${err.getMessage}"),
+            _ => ZIO.logInfo("Created self-signed certificate for HTTPS")
+          )
+      } else {
+        ZIO.succeed(Server.Config.default.port(port))
+      }
+      
+      // Start the server in a forked fiber to allow signaling when ready
+      serverFiber <- Server.serve(Routes(authRoute).sandbox)
         .provide(
-          ZLayer.succeed(Server.Config.default.port(port)),
+          ZLayer.succeed(serverConfig),
           Server.live
         )
+        .tapError(err => ZIO.logError(s"Server startup error: ${err.getMessage}"))
+        .fork
+      
+      // Give the server more time to bind to the port
+      _ <- ZIO.sleep(2.seconds)
+      
+      // Test if the server is listening by attempting to connect
+      _ <- testServerConnection(port)
+        .retry(Schedule.recurs(10) && Schedule.spaced(500.millis))
+        .tapBoth(
+          err => ZIO.logError(s"Server failed to start after retries: ${err.getMessage}") *> serverReady.fail(err),
+          _ => ZIO.logInfo("OAuth callback server is ready and listening") *> serverReady.succeed(())
+        )
+      
+      // Keep the server running
+      _ <- serverFiber.join
     } yield ()
+  }
+  
+  private def testServerConnection(port: Int): Task[Unit] = {
+    import java.net.{Socket, InetSocketAddress}
+    ZIO.attempt {
+      val socket = new Socket()
+      try {
+        socket.connect(new InetSocketAddress("127.0.0.1", port), 1000)
+        socket.close()
+      } finally {
+        if (!socket.isClosed) socket.close()
+      }
+    }.mapError(e => new Exception(s"Cannot connect to port $port: ${e.getMessage}"))
   }
 }
 

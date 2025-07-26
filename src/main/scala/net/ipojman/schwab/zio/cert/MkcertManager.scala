@@ -22,7 +22,7 @@ object MkcertManager {
       println("Command: " + caInstallCommand.mkString(" "))
       println("===========================================\n")
 
-      val caInstallProcess = new ProcessBuilder(caInstallCommand: _*).inheritIO().start()
+      val caInstallProcess = new ProcessBuilder(caInstallCommand*).inheritIO().start()
       val caInstallExitCode = caInstallProcess.waitFor()
       if (caInstallExitCode != 0) {
         println("Warning: Could not automatically install the local CA.")
@@ -52,7 +52,7 @@ object MkcertManager {
       println("Command: " + mkcertGenCommand.mkString(" "))
       println("==============================================\n")
 
-      val mkcertGenProcess = new ProcessBuilder(mkcertGenCommand: _*).inheritIO().start()
+      val mkcertGenProcess = new ProcessBuilder(mkcertGenCommand*).inheritIO().start()
       val genExitCode = mkcertGenProcess.waitFor()
       if (genExitCode != 0) {
         throw new RuntimeException("Failed to generate certificate with mkcert")
@@ -96,7 +96,7 @@ object MkcertManager {
       println("Command: " + opensslCommand.mkString(" "))
       println("===========================================\n")
 
-      val opensslProcess = new ProcessBuilder(opensslCommand: _*).inheritIO().start()
+      val opensslProcess = new ProcessBuilder(opensslCommand*).inheritIO().start()
       val convertExitCode = opensslProcess.waitFor()
       if (convertExitCode != 0) {
         throw new RuntimeException("Failed to convert certificate to PKCS12")
@@ -114,7 +114,7 @@ object MkcertManager {
         "-out", "server-cert.crt"
       )
 
-      val exportProcess = new ProcessBuilder(exportCertCommand: _*).inheritIO().start()
+      val exportProcess = new ProcessBuilder(exportCertCommand*).inheritIO().start()
       val exportExitCode = exportProcess.waitFor()
 
       if (exportExitCode == 0) {

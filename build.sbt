@@ -9,6 +9,7 @@ val zioConfigVersion = "4.0.4"
 lazy val zioSchwabApi = (project in file("."))
   .settings(
     name := "zio-schwab-api",
+    scalacOptions += "-Xmax-inlines:64",
 
     libraryDependencies ++= List(
       "org.specs2" %% "specs2-core" % "5.5.8",

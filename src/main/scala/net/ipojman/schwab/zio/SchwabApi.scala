@@ -26,6 +26,7 @@ case class TokenResponse(
 
 object TokenResponse {
   implicit val decoder: JsonDecoder[TokenResponse] = DeriveJsonDecoder.gen[TokenResponse]
+  implicit val encoder: JsonEncoder[TokenResponse] = DeriveJsonEncoder.gen[TokenResponse]
 }
 /**
  * Main API client for Schwab
@@ -70,10 +71,15 @@ object SchwabClient {
     ZIO.serviceWithZIO[SchwabClient](_.makeRawApiCall(endpoint, accessToken))
 
   /**
-   * Live implementation of the SchwabClient
+   * Live implementation of the SchwabClient (basic, no OAuth handling)
    */
   val live: ZLayer[SchwabApiConfig & Client, Nothing, SchwabClient] =
     ZLayer.fromFunction(LiveSchwabClient(_, _))
+  
+  /**
+   * Seamless implementation that handles OAuth automatically (recommended for most apps)
+   */
+  val seamless: ZLayer[Any, Throwable, SchwabClient] = SeamlessSchwabClient.live
 }
 
 /**
@@ -166,8 +172,9 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
 
   def makeApiCall[T: JsonDecoder](endpoint: String, accessToken: String): Task[T] = {
     makeRawApiCall(endpoint, accessToken).flatMap { response =>
+      ZIO.logDebug(s"Raw API response: $response") *>
       ZIO.fromEither(response.fromJson[T])
-        .mapError(err => new RuntimeException(s"Failed to parse API response: $err"))
+        .mapError(err => new RuntimeException(s"Failed to parse API response: $err\nRaw response: ${response.take(1000)}..."))
     }
   }
 

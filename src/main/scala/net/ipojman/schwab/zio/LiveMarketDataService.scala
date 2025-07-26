@@ -33,11 +33,49 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     
     for {
       token <- client.getAccessToken
-      response <- client.makeApiCall[Map[String, Quote]](
+      response <- client.makeApiCall[Map[String, QuoteResponse]](
         s"$baseEndpoint/quotes$queryParams",
         token.access_token
       )
-    } yield response
+      // Convert QuoteResponse to simplified Quote
+      simplifiedQuotes = response.map { case (symbol, qr) =>
+        val qd = qr.quote
+        val ext = qr.extended
+        val reg = qr.regular
+        
+        // Use quote data first, then extended, then regular market data as fallback
+        symbol -> Quote(
+          symbol = symbol,
+          bid = qd.flatMap(_.bidPrice).orElse(ext.flatMap(_.bidPrice)),
+          ask = qd.flatMap(_.askPrice).orElse(ext.flatMap(_.askPrice)),
+          last = qd.flatMap(_.lastPrice).orElse(ext.flatMap(_.lastPrice)).orElse(reg.flatMap(_.regularMarketLastPrice)),
+          open = qd.flatMap(_.openPrice),
+          high = qd.flatMap(_.highPrice),
+          low = qd.flatMap(_.lowPrice),
+          close = qd.flatMap(_.closePrice),
+          volume = qd.flatMap(_.totalVolume).orElse(ext.flatMap(_.totalVolume)),
+          quoteTime = qd.flatMap(_.quoteTime).orElse(ext.flatMap(_.quoteTime)),
+          bidSize = qd.flatMap(_.bidSize).orElse(ext.flatMap(_.bidSize)),
+          askSize = qd.flatMap(_.askSize).orElse(ext.flatMap(_.askSize)),
+          mark = qd.flatMap(_.mark).orElse(ext.flatMap(_.mark)),
+          change = qd.flatMap(_.netChange).orElse(reg.flatMap(_.regularMarketNetChange)),
+          percentChange = qd.flatMap(_.netPercentChange).orElse(reg.flatMap(_.regularMarketPercentChange)),
+          fiftyTwoWeekHigh = qd.flatMap(_.`52WeekHigh`),
+          fiftyTwoWeekLow = qd.flatMap(_.`52WeekLow`),
+          openInterest = qd.flatMap(_.openInterest),
+          volatility = qd.flatMap(_.volatility),
+          moneyIntrinsicValue = qd.flatMap(_.moneyIntrinsicValue),
+          timeValue = qd.flatMap(_.timeValue),
+          delta = qd.flatMap(_.delta),
+          gamma = qd.flatMap(_.gamma),
+          theta = qd.flatMap(_.theta),
+          vega = qd.flatMap(_.vega),
+          rho = qd.flatMap(_.rho),
+          theoreticalOptionValue = qd.flatMap(_.theoreticalOptionValue),
+          underlyingPrice = qd.flatMap(_.underlyingPrice)
+        )
+      }
+    } yield simplifiedQuotes
   }
   
   override def getQuote(
@@ -48,12 +86,47 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     
     for {
       token <- client.getAccessToken
-      response <- client.makeApiCall[Map[String, Quote]](
+      response <- client.makeApiCall[Map[String, QuoteResponse]](
         s"$baseEndpoint/$symbol/quotes$queryParams",
         token.access_token
       )
-      quote <- ZIO.fromOption(response.get(symbol))
+      quoteResponse <- ZIO.fromOption(response.get(symbol))
         .orElseFail(new RuntimeException(s"Quote not found for symbol: $symbol"))
+      // Convert QuoteResponse to simplified Quote
+      qd = quoteResponse.quote
+      ext = quoteResponse.extended
+      reg = quoteResponse.regular
+      
+      quote = Quote(
+        symbol = symbol,
+        bid = qd.flatMap(_.bidPrice).orElse(ext.flatMap(_.bidPrice)),
+        ask = qd.flatMap(_.askPrice).orElse(ext.flatMap(_.askPrice)),
+        last = qd.flatMap(_.lastPrice).orElse(ext.flatMap(_.lastPrice)).orElse(reg.flatMap(_.regularMarketLastPrice)),
+        open = qd.flatMap(_.openPrice),
+        high = qd.flatMap(_.highPrice),
+        low = qd.flatMap(_.lowPrice),
+        close = qd.flatMap(_.closePrice),
+        volume = qd.flatMap(_.totalVolume).orElse(ext.flatMap(_.totalVolume)),
+        quoteTime = qd.flatMap(_.quoteTime).orElse(ext.flatMap(_.quoteTime)),
+        bidSize = qd.flatMap(_.bidSize).orElse(ext.flatMap(_.bidSize)),
+        askSize = qd.flatMap(_.askSize).orElse(ext.flatMap(_.askSize)),
+        mark = qd.flatMap(_.mark).orElse(ext.flatMap(_.mark)),
+        change = qd.flatMap(_.netChange).orElse(reg.flatMap(_.regularMarketNetChange)),
+        percentChange = qd.flatMap(_.netPercentChange).orElse(reg.flatMap(_.regularMarketPercentChange)),
+        fiftyTwoWeekHigh = qd.flatMap(_.`52WeekHigh`),
+        fiftyTwoWeekLow = qd.flatMap(_.`52WeekLow`),
+        openInterest = qd.flatMap(_.openInterest),
+        volatility = qd.flatMap(_.volatility),
+        moneyIntrinsicValue = qd.flatMap(_.moneyIntrinsicValue),
+        timeValue = qd.flatMap(_.timeValue),
+        delta = qd.flatMap(_.delta),
+        gamma = qd.flatMap(_.gamma),
+        theta = qd.flatMap(_.theta),
+        vega = qd.flatMap(_.vega),
+        rho = qd.flatMap(_.rho),
+        theoreticalOptionValue = qd.flatMap(_.theoreticalOptionValue),
+        underlyingPrice = qd.flatMap(_.underlyingPrice)
+      )
     } yield quote
   }
   
@@ -157,17 +230,17 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     
     for {
       token <- client.getAccessToken
-      response <- client.makeApiCall[List[Mover]](
+      response <- client.makeApiCall[MoverResponse](
         s"$baseEndpoint/movers/$index$queryParams",
         token.access_token
       )
-    } yield response
+    } yield response.screeners
   }
   
   override def getMarketHours(
     markets: List[String],
     date: Option[String] = None
-  ): Task[Map[String, MarketHours]] = {
+  ): Task[MarketHours] = {
     val marketsParam = markets.mkString(",")
     val queryParams = buildQueryParams(
       "markets" -> Some(marketsParam),
@@ -176,7 +249,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     
     for {
       token <- client.getAccessToken
-      response <- client.makeApiCall[Map[String, MarketHours]](
+      response <- client.makeApiCall[MarketHours](
         s"$baseEndpoint/markets$queryParams",
         token.access_token
       )
@@ -191,13 +264,11 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     
     for {
       token <- client.getAccessToken
-      response <- client.makeApiCall[Map[String, MarketHours]](
+      response <- client.makeApiCall[MarketHours](
         s"$baseEndpoint/markets/$market$queryParams",
         token.access_token
       )
-      hours <- ZIO.fromOption(response.get(market))
-        .orElseFail(new RuntimeException(s"Market hours not found for market: $market"))
-    } yield hours
+    } yield response
   }
   
   override def getInstruments(
@@ -211,11 +282,11 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     
     for {
       token <- client.getAccessToken
-      response <- client.makeApiCall[Map[String, InstrumentResponse]](
+      response <- client.makeApiCall[InstrumentsResponse](
         s"$baseEndpoint/instruments$queryParams",
         token.access_token
       )
-    } yield response.values.toList
+    } yield response.instruments
   }
   
   override def getInstrumentByCusip(cusip: String): Task[InstrumentResponse] = {

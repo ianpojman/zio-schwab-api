@@ -134,12 +134,12 @@ trait MarketDataService {
    * 
    * @param markets List of markets (EQUITY, OPTION, BOND, FUTURE, FOREX)
    * @param date Date in yyyy-MM-dd format
-   * @return Map of market to market hours
+   * @return Market hours grouped by market type
    */
   def getMarketHours(
     markets: List[String],
     date: Option[String] = None
-  ): Task[Map[String, MarketHours]]
+  ): Task[MarketHours]
   
   /**
    * Get market hours for a single market
@@ -243,7 +243,7 @@ object MarketDataService {
   def getMarketHours(
     markets: List[String],
     date: Option[String] = None
-  ): ZIO[MarketDataService, Throwable, Map[String, MarketHours]] =
+  ): ZIO[MarketDataService, Throwable, MarketHours] =
     ZIO.serviceWithZIO[MarketDataService](_.getMarketHours(markets, date))
     
   def getMarketHour(

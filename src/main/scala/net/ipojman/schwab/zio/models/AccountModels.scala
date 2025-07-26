@@ -2,16 +2,15 @@ package net.ipojman.schwab.zio.models
 
 import zio.json.*
 
-// Account summary returned from GET /trader/v1/accounts
-case class SchwabAccountSummary(
-  accountNumber: String,
-  `type`: String,
-  nickname: Option[String]
+// Response item from GET /trader/v1/accounts
+// Each item in the array has a securitiesAccount field
+case class SchwabAccountListItem(
+  securitiesAccount: SecuritiesAccount
 )
 
-object SchwabAccountSummary {
-  implicit val decoder: JsonDecoder[SchwabAccountSummary] = DeriveJsonDecoder.gen[SchwabAccountSummary]
-  implicit val encoder: JsonEncoder[SchwabAccountSummary] = DeriveJsonEncoder.gen[SchwabAccountSummary]
+object SchwabAccountListItem {
+  implicit val decoder: JsonDecoder[SchwabAccountListItem] = DeriveJsonDecoder.gen[SchwabAccountListItem]
+  implicit val encoder: JsonEncoder[SchwabAccountListItem] = DeriveJsonEncoder.gen[SchwabAccountListItem]
 }
 
 // Full account response from GET /trader/v1/accounts/{accountNumber}
@@ -26,8 +25,15 @@ object SchwabAccountResponse {
 
 case class SecuritiesAccount(
   accountNumber: String,
-  currentBalances: CurrentBalances,
-  positions: List[SchwabPosition]
+  `type`: String = "CASH",
+  roundTrips: Option[Int] = None,
+  isDayTrader: Option[Boolean] = None,
+  isClosingOnlyRestricted: Option[Boolean] = None,
+  pfcbFlag: Option[Boolean] = None,
+  positions: Option[List[SchwabPosition]] = None,
+  initialBalances: Option[InitialBalances] = None,
+  currentBalances: Option[CurrentBalances] = None,
+  projectedBalances: Option[ProjectedBalances] = None
 )
 
 object SecuritiesAccount {
@@ -36,14 +42,44 @@ object SecuritiesAccount {
 }
 
 case class CurrentBalances(
-  cashBalance: Double,
-  totalCash: Double,
-  netLiquidation: Double
+  cashBalance: Option[Double] = None,
+  totalCash: Option[Double] = None,
+  netLiquidation: Option[Double] = None,
+  availableFunds: Option[Double] = None,
+  buyingPower: Option[Double] = None,
+  equity: Option[Double] = None,
+  marginBalance: Option[Double] = None
 )
 
 object CurrentBalances {
   implicit val decoder: JsonDecoder[CurrentBalances] = DeriveJsonDecoder.gen[CurrentBalances]
   implicit val encoder: JsonEncoder[CurrentBalances] = DeriveJsonEncoder.gen[CurrentBalances]
+}
+
+// Initial balances typically have more fields including totalCash
+case class InitialBalances(
+  cashBalance: Option[Double] = None,
+  totalCash: Option[Double] = None,
+  equity: Option[Double] = None,
+  buyingPower: Option[Double] = None,
+  availableFundsNonMarginableTrade: Option[Double] = None,
+  liquidationValue: Option[Double] = None,
+  accountValue: Option[Double] = None
+)
+
+object InitialBalances {
+  implicit val decoder: JsonDecoder[InitialBalances] = DeriveJsonDecoder.gen[InitialBalances]
+  implicit val encoder: JsonEncoder[InitialBalances] = DeriveJsonEncoder.gen[InitialBalances]
+}
+
+case class ProjectedBalances(
+  cashBalance: Option[Double] = None,
+  equity: Option[Double] = None
+)
+
+object ProjectedBalances {
+  implicit val decoder: JsonDecoder[ProjectedBalances] = DeriveJsonDecoder.gen[ProjectedBalances]
+  implicit val encoder: JsonEncoder[ProjectedBalances] = DeriveJsonEncoder.gen[ProjectedBalances]
 }
 
 case class SchwabPosition(
