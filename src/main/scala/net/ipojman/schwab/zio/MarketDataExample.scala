@@ -6,7 +6,7 @@ import java.time.ZonedDateTime
 import net.ipojman.schwab.zio.models.OrderStatus
 
 /**
-* Example usage of the MarketDataService and OrderService
+* Example usage of the MarketDataService, OrderService, and Enhanced OrderService
  */
 object MarketDataExample extends ZIOAppDefault {
   
@@ -201,6 +201,50 @@ object MarketDataExample extends ZIOAppDefault {
       Console.printLine(s"  ${status}: ${count} orders")
     }
     
+    // Enhanced Order Service Examples
+    _ <- Console.printLine("\n=== Enhanced Order Service Examples ===")
+    
+    // Get enhanced service instance
+    enhancedOrderService <- ZIO.service[SchwabOrderServiceEnhanced]
+    
+    // Example 14: Get orders for a specific symbol with enhanced parsing
+    _ <- Console.printLine("\n14. Using Enhanced Order Service for symbol-specific queries...")
+    spyOrders <- enhancedOrderService.getOrdersForSymbol("SPY", thirtyDaysAgo.toLocalDate, now.toLocalDate)
+      .catchAll { err =>
+        Console.printLineError(s"Failed to get SPY orders: ${err.getMessage}") *>
+        ZIO.succeed(List.empty)
+      }
+    _ <- Console.printLine(s"Found ${spyOrders.size} SPY orders (with fixed childOrderStrategies parsing)")
+    
+    // Example 15: Get filled orders with enhanced service
+    _ <- Console.printLine("\n15. Getting filled orders for QQQ...")
+    qqqFilledOrders <- enhancedOrderService.getFilledOrdersForSymbol("QQQ", thirtyDaysAgo.toLocalDate, now.toLocalDate)
+      .catchAll { err =>
+        Console.printLineError(s"Failed to get QQQ filled orders: ${err.getMessage}") *>
+        ZIO.succeed(List.empty)
+      }
+    _ <- Console.printLine(s"Found ${qqqFilledOrders.size} filled QQQ orders")
+    _ <- ZIO.foreach(qqqFilledOrders.take(3)) { order =>
+      val priceStr = order.price.map(p => f"@ $$${p}%.2f").getOrElse("@ MKT")
+      Console.printLine(s"  ${order.enteredTime.toLocalDate} - ${order.instruction} ${order.quantity} shares ${priceStr}")
+    }
+    
+    // Example 16: Get all orders across all symbols
+    _ <- Console.printLine("\n16. Getting all orders across all symbols for the past 7 days...")
+    allSymbolOrders <- enhancedOrderService.getOrdersForAllSymbols(sevenDaysAgo.toLocalDate, now.toLocalDate)
+      .catchAll { err =>
+        Console.printLineError(s"Failed to get all symbol orders: ${err.getMessage}") *>
+        ZIO.succeed(List.empty)
+      }
+    _ <- Console.printLine(s"Found ${allSymbolOrders.size} total orders across all symbols")
+    
+    // Show top 5 most active symbols
+    symbolActivity = allSymbolOrders.groupBy(_.symbol).view.mapValues(_.size).toList.sortBy(-_._2).take(5)
+    _ <- Console.printLine("Top 5 most active symbols:")
+    _ <- ZIO.foreach(symbolActivity) { case (symbol, count) =>
+      Console.printLine(s"  ${symbol}: ${count} orders")
+    }
+    
   } yield ()
   
   // Run the program with all necessary layers
@@ -208,6 +252,7 @@ object MarketDataExample extends ZIOAppDefault {
     .provide(
       LiveMarketDataService.layer,
       LiveOrderService.layer,
+      SchwabOrderServiceEnhanced.layer,
       SchwabClient.seamless
     )
     .tapError(err => Console.printLineError(s"Error: ${err.getMessage}"))

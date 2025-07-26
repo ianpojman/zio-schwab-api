@@ -360,7 +360,7 @@ case class MarketHoursDetail(
   date: String,
   marketType: String,
   product: String,
-  productName: String,
+  productName: Option[String] = None,
   isOpen: Boolean,
   sessionHours: Option[SessionHours] = None
 )
