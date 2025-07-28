@@ -252,19 +252,34 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     markets: List[String],
     date: Option[String] = None
   ): Task[MarketHours] = {
-    val marketsParam = markets.mkString(",")
-    val queryParams = buildQueryParams(
-      "markets" -> Some(marketsParam),
-      "date" -> date
-    )
-    
-    for {
-      token <- getValidToken()
-      response <- client.makeApiCall[MarketHours](
-        s"$baseEndpoint/markets$queryParams",
-        token.access_token
-      )
-    } yield response
+    // Validate inputs
+    if (markets.isEmpty) {
+      ZIO.fail(new IllegalArgumentException("Markets list cannot be empty"))
+    } else {
+      // Ensure markets are uppercase as required by Schwab API
+      val validMarkets = Set("EQUITY", "OPTION", "BOND", "FUTURE", "FOREX")
+      val upperMarkets = markets.map(_.toUpperCase)
+      val invalidMarkets = upperMarkets.filterNot(validMarkets.contains)
+      
+      if (invalidMarkets.nonEmpty) {
+        ZIO.logWarning(s"Invalid market types: ${invalidMarkets.mkString(", ")}. Valid types are: ${validMarkets.mkString(", ")}") *>
+        ZIO.fail(new IllegalArgumentException(s"Invalid market types: ${invalidMarkets.mkString(", ")}"))
+      } else {
+        val marketsParam = upperMarkets.mkString(",")
+        val queryParams = buildQueryParams(
+          "markets" -> Some(marketsParam),
+          "date" -> date
+        )
+        
+        for {
+          token <- getValidToken()
+          response <- client.makeApiCall[MarketHours](
+            s"$baseEndpoint/markets$queryParams",
+            token.access_token
+          )
+        } yield response
+      }
+    }
   }
   
   override def getMarketHour(
