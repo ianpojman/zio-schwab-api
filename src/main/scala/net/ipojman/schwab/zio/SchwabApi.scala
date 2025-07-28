@@ -197,7 +197,11 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
       _        <- ZIO.logDebug(s"API response status: ${response.status}")
       body     <- response.body.asString
       _        <- ZIO.when(response.status.isError)(
-        ZIO.logError(s"API error: ${response.status} for URL: $fullUrl - Response body: $body")
+        if (response.status.code == 401) {
+          ZIO.logError(s"Authentication error (401) for URL: $fullUrl - Token may be expired")
+        } else {
+          ZIO.logError(s"API error: ${response.status} for URL: $fullUrl - Response body: $body")
+        }
       )
       _        <- ZIO.logTrace(s"API response body: $body")
       _        <- ZIO.fail(new RuntimeException(s"API error: ${response.status} for URL: $fullUrl - Response body: $body"))

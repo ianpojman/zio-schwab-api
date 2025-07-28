@@ -42,12 +42,22 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
       "indicative" -> (if (indicative) Some(true) else None)
     )
     
+    val endpoint = s"$baseEndpoint/quotes$queryParams"
+    
+    val apiCall = client match {
+      case seamless: SeamlessSchwabClient =>
+        // Use the retry mechanism for seamless clients
+        seamless.makeApiCallWithRetry[Map[String, QuoteResponse]](endpoint)
+      case _ =>
+        // Fallback to standard approach for other clients
+        for {
+          token <- getValidToken()
+          response <- client.makeApiCall[Map[String, QuoteResponse]](endpoint, token.access_token)
+        } yield response
+    }
+    
     for {
-      token <- getValidToken()
-      response <- client.makeApiCall[Map[String, QuoteResponse]](
-        s"$baseEndpoint/quotes$queryParams",
-        token.access_token
-      )
+      response <- apiCall
       // Convert QuoteResponse to simplified Quote
       simplifiedQuotes = response.map { case (symbol, qr) =>
         val qd = qr.quote
@@ -94,13 +104,22 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     fields: Option[String] = None
   ): Task[Quote] = {
     val queryParams = buildQueryParams("fields" -> fields)
+    val endpoint = s"$baseEndpoint/$symbol/quotes$queryParams"
+    
+    val apiCall = client match {
+      case seamless: SeamlessSchwabClient =>
+        // Use the retry mechanism for seamless clients
+        seamless.makeApiCallWithRetry[Map[String, QuoteResponse]](endpoint)
+      case _ =>
+        // Fallback to standard approach for other clients
+        for {
+          token <- getValidToken()
+          response <- client.makeApiCall[Map[String, QuoteResponse]](endpoint, token.access_token)
+        } yield response
+    }
     
     for {
-      token <- getValidToken()
-      response <- client.makeApiCall[Map[String, QuoteResponse]](
-        s"$baseEndpoint/$symbol/quotes$queryParams",
-        token.access_token
-      )
+      response <- apiCall
       quoteResponse <- ZIO.fromOption(response.get(symbol))
         .orElseFail(new RuntimeException(s"Quote not found for symbol: $symbol"))
       // Convert QuoteResponse to simplified Quote

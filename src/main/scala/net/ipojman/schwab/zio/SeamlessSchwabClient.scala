@@ -27,6 +27,41 @@ class SeamlessSchwabClient(
     underlying.makeApiCall(endpoint, accessToken)
   def makeRawApiCall(endpoint: String, accessToken: String): Task[String] = 
     underlying.makeRawApiCall(endpoint, accessToken)
+  
+  /**
+   * Make an API call with automatic retry on 401 errors
+   * This will attempt to refresh the token and retry the call once
+   */
+  def makeApiCallWithRetry[T: JsonDecoder](endpoint: String): Task[T] = {
+    for {
+      token <- ensureAuthenticated()
+      result <- makeApiCall[T](endpoint, token.access_token).catchSome {
+        case e: RuntimeException if e.getMessage.contains("401") =>
+          ZIO.logInfo(s"Received 401 error for $endpoint, forcing token refresh...") *>
+          ensureAuthenticated(forceRefresh = true).flatMap { newToken =>
+            ZIO.logInfo(s"Retrying $endpoint with refreshed token...") *>
+            makeApiCall[T](endpoint, newToken.access_token)
+          }
+      }
+    } yield result
+  }
+  
+  /**
+   * Make a raw API call with automatic retry on 401 errors
+   */
+  def makeRawApiCallWithRetry(endpoint: String): Task[String] = {
+    for {
+      token <- ensureAuthenticated()
+      result <- makeRawApiCall(endpoint, token.access_token).catchSome {
+        case e: RuntimeException if e.getMessage.contains("401") =>
+          ZIO.logInfo(s"Received 401 error for $endpoint, forcing token refresh...") *>
+          ensureAuthenticated(forceRefresh = true).flatMap { newToken =>
+            ZIO.logInfo(s"Retrying $endpoint with refreshed token...") *>
+            makeRawApiCall(endpoint, newToken.access_token)
+          }
+      }
+    } yield result
+  }
   def getUserPreference(accessToken: String): Task[String] = 
     underlying.getUserPreference(accessToken)
   
@@ -35,15 +70,25 @@ class SeamlessSchwabClient(
   
   /**
    * Get a valid access token, handling OAuth flow automatically if needed
+   * @param forceRefresh if true, will refresh the token even if it appears valid
    */
-  def ensureAuthenticated(): Task[TokenResponse] = {
+  def ensureAuthenticated(forceRefresh: Boolean = false): Task[TokenResponse] = {
     tokenStorage.getTokenWithTimestamp().flatMap {
-      case Some((token, timestamp)) if isTokenValid(token, timestamp) => 
-        ZIO.logInfo("Using existing valid token") *>
+      case Some((token, timestamp)) if !forceRefresh && isTokenValid(token, timestamp) => 
+        val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp
+        val remaining = token.expires_in.getOrElse(1800) - age.toInt
+        ZIO.logInfo(s"Using existing valid token (age: ${age}s, remaining: ${remaining}s)") *>
         ZIO.succeed(token)
-      case Some((token, _)) if token.refresh_token.isDefined =>
-        ZIO.logInfo("Token invalid/expired, refreshing...") *>
-        refreshAndStoreToken(token.refresh_token.get)
+      case Some((token, timestamp)) if token.refresh_token.isDefined =>
+        val reason = if (forceRefresh) "forced refresh" else {
+          val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp
+          s"token expired/invalid (age: ${age}s)"
+        }
+        ZIO.logInfo(s"Refreshing token due to: $reason") *>
+        refreshAndStoreToken(token.refresh_token.get).catchAll { err =>
+          ZIO.logError(s"Token refresh failed: ${err.getMessage}. Initiating new OAuth flow...") *>
+          initiateOAuthFlow()
+        }
       case Some((token, _)) =>
         ZIO.logInfo("Token exists but no refresh token available, initiating OAuth flow") *>
         initiateOAuthFlow()
@@ -73,8 +118,13 @@ class SeamlessSchwabClient(
   
   private def refreshAndStoreToken(refreshToken: String): Task[TokenResponse] = {
     for {
-      newToken <- underlying.refreshToken(refreshToken)
+      _ <- ZIO.logDebug(s"Attempting to refresh token...")
+      newToken <- underlying.refreshToken(refreshToken).tapBoth(
+        err => ZIO.logError(s"Token refresh failed: ${err.getMessage}"),
+        token => ZIO.logInfo(s"Token refreshed successfully. New expiry: ${token.expires_in.getOrElse(1800)}s")
+      )
       _ <- tokenStorage.storeToken(newToken)
+      _ <- ZIO.logDebug("New token stored to disk")
     } yield newToken
   }
   
@@ -269,9 +319,9 @@ class FileTokenStorage(filePath: String = s"${java.lang.System.getProperty("user
   
   override def storeToken(token: TokenResponse): Task[Unit] = {
     ZIO.attempt {
-      // For compatibility, store in legacy format (just the token)
-      // This ensures other apps can read it
-      val json = token.toJson
+      // Store in new format with timestamp
+      val storedToken = StoredToken(token, java.lang.System.currentTimeMillis() / 1000)
+      val json = storedToken.toJson
       val file = new File(filePath)
       file.getParentFile.mkdirs()
       val writer = new PrintWriter(file)
@@ -293,17 +343,23 @@ class FileTokenStorage(filePath: String = s"${java.lang.System.getProperty("user
       if (file.exists()) {
         val content = new String(Files.readAllBytes(Paths.get(filePath)))
         
-        // Try to parse as StoredToken first (new format)
-        content.fromJson[StoredToken].toOption match {
-          case Some(stored) => Some((stored.token, stored.obtainedAt))
-          case None =>
-            // Fall back to old format (just TokenResponse)
-            // Use current time as obtainedAt for legacy tokens
-            content.fromJson[TokenResponse].toOption.map(token => (token, java.lang.System.currentTimeMillis() / 1000))
-        }
+        // Parse as StoredToken (new format only)
+        content.fromJson[StoredToken].toOption
       } else {
         None
       }
+    }.flatMap {
+      case Some(stored) => 
+        val currentTime = java.lang.System.currentTimeMillis() / 1000
+        val age = currentTime - stored.obtainedAt
+        ZIO.logDebug(s"Token loaded from storage. Age: ${age}s, Expires in: ${stored.token.expires_in.getOrElse(1800)}s") *>
+        ZIO.succeed(Some((stored.token, stored.obtainedAt)))
+      case None =>
+        ZIO.logDebug("No valid token found in storage") *>
+        ZIO.succeed(None)
+    }.catchAll { err =>
+      ZIO.logError(s"Failed to read token from storage: ${err.getMessage}") *>
+      ZIO.succeed(None)
     }
   }
 }
@@ -333,10 +389,11 @@ object SeamlessSchwabClient {
   
   /**
    * Ensure authenticated before making API calls
+   * @param forceRefresh if true, will refresh the token even if it appears valid
    */
-  def ensureAuthenticated: ZIO[SchwabClient, Throwable, TokenResponse] =
+  def ensureAuthenticated(forceRefresh: Boolean = false): ZIO[SchwabClient, Throwable, TokenResponse] =
     ZIO.serviceWithZIO[SchwabClient] {
-      case client: SeamlessSchwabClient => client.ensureAuthenticated()
+      case client: SeamlessSchwabClient => client.ensureAuthenticated(forceRefresh)
       case _ => ZIO.fail(new Exception("Not a SeamlessSchwabClient"))
     }
 }

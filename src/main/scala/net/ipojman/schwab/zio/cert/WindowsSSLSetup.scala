@@ -16,7 +16,7 @@ object WindowsSSLSetup {
   
   // Get the keystore path in user's home directory
   private def getKeystorePath: String = {
-    val homeDir = System.getProperty("user.home")
+    val homeDir = java.lang.System.getProperty("user.home")
     val schwabDir = new java.io.File(homeDir, ".schwab")
     if (!schwabDir.exists()) {
       schwabDir.mkdirs()
