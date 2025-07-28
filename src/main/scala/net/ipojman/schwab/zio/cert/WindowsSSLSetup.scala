@@ -5,7 +5,7 @@ import zio.http.SSLConfig
 import javax.net.ssl.*
 import java.security.*
 import java.security.cert.X509Certificate
-import java.io.FileOutputStream
+import java.io.{File, FileInputStream, FileOutputStream}
 import zio.Config
 
 /**
@@ -14,14 +14,26 @@ import zio.Config
  */
 object WindowsSSLSetup {
   
+  // Get the keystore path in user's home directory
+  private def getKeystorePath: String = {
+    val homeDir = System.getProperty("user.home")
+    val schwabDir = new java.io.File(homeDir, ".schwab")
+    if (!schwabDir.exists()) {
+      schwabDir.mkdirs()
+    }
+    new java.io.File(schwabDir, "oauth-keystore.p12").getAbsolutePath
+  }
+  
   def createSelfSignedCertificate(
     domain: String = "127.0.0.1",
     port: Int = 8443
   ): Task[SSLSetup] = {
+    val keystorePath = getKeystorePath
+    
     for {
       // Use the existing CertificateManager to create certificate
       cert <- CertificateManager.ensureSelfSignedCertificate(
-        keystorePath = "schwab-oauth.p12",
+        keystorePath = keystorePath,
         password = "password",
         hostname = domain,
         port = port
@@ -30,7 +42,7 @@ object WindowsSSLSetup {
       // Load the keystore
       keyStore <- ZIO.attempt {
         val ks = KeyStore.getInstance("PKCS12")
-        val fis = new java.io.FileInputStream("schwab-oauth.p12")
+        val fis = new java.io.FileInputStream(keystorePath)
         ks.load(fis, "password".toCharArray)
         fis.close()
         ks
@@ -51,7 +63,7 @@ object WindowsSSLSetup {
       
       // Create SSL config using the keystore file
       sslConfig = SSLConfig.fromJavaxNetSslKeyStoreFile(
-        "schwab-oauth.p12",
+        keystorePath,
         Some(Config.Secret("password")),
         keyManagerKeyStoreType = "PKCS12"
       )

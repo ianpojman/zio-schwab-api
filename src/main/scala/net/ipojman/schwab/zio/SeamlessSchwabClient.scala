@@ -269,8 +269,9 @@ class FileTokenStorage(filePath: String = s"${java.lang.System.getProperty("user
   
   override def storeToken(token: TokenResponse): Task[Unit] = {
     ZIO.attempt {
-      val storedToken = StoredToken(token, java.lang.System.currentTimeMillis() / 1000)
-      val json = storedToken.toJson
+      // For compatibility, store in legacy format (just the token)
+      // This ensures other apps can read it
+      val json = token.toJson
       val file = new File(filePath)
       file.getParentFile.mkdirs()
       val writer = new PrintWriter(file)
@@ -297,7 +298,8 @@ class FileTokenStorage(filePath: String = s"${java.lang.System.getProperty("user
           case Some(stored) => Some((stored.token, stored.obtainedAt))
           case None =>
             // Fall back to old format (just TokenResponse)
-            content.fromJson[TokenResponse].toOption.map(token => (token, 0L))
+            // Use current time as obtainedAt for legacy tokens
+            content.fromJson[TokenResponse].toOption.map(token => (token, java.lang.System.currentTimeMillis() / 1000))
         }
       } else {
         None
