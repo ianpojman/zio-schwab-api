@@ -19,6 +19,17 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     if (validParams.isEmpty) "" else "?" + validParams.mkString("&")
   }
   
+  /**
+   * Get a valid token - uses ensureAuthenticated for SeamlessSchwabClient,
+   * falls back to getAccessToken for other implementations
+   */
+  private def getValidToken(): Task[TokenResponse] = {
+    client match {
+      case seamless: SeamlessSchwabClient => seamless.ensureAuthenticated()
+      case _ => client.getAccessToken
+    }
+  }
+  
   override def getQuotes(
     symbols: List[String], 
     fields: Option[String] = None,
@@ -32,7 +43,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     )
     
     for {
-      token <- client.getAccessToken
+      token <- getValidToken()
       response <- client.makeApiCall[Map[String, QuoteResponse]](
         s"$baseEndpoint/quotes$queryParams",
         token.access_token
@@ -85,7 +96,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     val queryParams = buildQueryParams("fields" -> fields)
     
     for {
-      token <- client.getAccessToken
+      token <- getValidToken()
       response <- client.makeApiCall[Map[String, QuoteResponse]](
         s"$baseEndpoint/$symbol/quotes$queryParams",
         token.access_token
@@ -168,7 +179,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     )
     
     for {
-      token <- client.getAccessToken
+      token <- getValidToken()
       response <- client.makeApiCall[OptionChain](
         s"$baseEndpoint/chains$queryParams",
         token.access_token
@@ -180,7 +191,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     val queryParams = buildQueryParams("symbol" -> Some(symbol))
     
     for {
-      token <- client.getAccessToken
+      token <- getValidToken()
       response <- client.makeApiCall[OptionExpirationChain](
         s"$baseEndpoint/expirationchain$queryParams",
         token.access_token
@@ -210,7 +221,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     )
     
     for {
-      token <- client.getAccessToken
+      token <- getValidToken()
       response <- client.makeApiCall[PriceHistory](
         s"$baseEndpoint/pricehistory$queryParams",
         token.access_token
@@ -229,7 +240,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     )
     
     for {
-      token <- client.getAccessToken
+      token <- getValidToken()
       response <- client.makeApiCall[MoverResponse](
         s"$baseEndpoint/movers/$index$queryParams",
         token.access_token
@@ -248,7 +259,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     )
     
     for {
-      token <- client.getAccessToken
+      token <- getValidToken()
       response <- client.makeApiCall[MarketHours](
         s"$baseEndpoint/markets$queryParams",
         token.access_token
@@ -274,7 +285,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     )
     
     for {
-      token <- client.getAccessToken
+      token <- getValidToken()
       response <- client.makeApiCall[InstrumentsResponse](
         s"$baseEndpoint/instruments$queryParams",
         token.access_token
@@ -284,7 +295,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
   
   override def getInstrumentByCusip(cusip: String): Task[InstrumentResponse] = {
     for {
-      token <- client.getAccessToken
+      token <- getValidToken()
       response <- client.makeApiCall[List[InstrumentResponse]](
         s"$baseEndpoint/instruments/$cusip",
         token.access_token
