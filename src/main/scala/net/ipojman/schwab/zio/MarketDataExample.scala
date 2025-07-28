@@ -14,6 +14,38 @@ object MarketDataExample extends ZIOAppDefault {
   val program = for {
     _ <- Console.printLine("=== Schwab Market Data API Example ===")
     
+    // TEST: User Preferences Endpoint
+    _ <- Console.printLine("\nTEST: Checking getUserPreference endpoint...")
+    _ <- (for {
+      client <- ZIO.service[SchwabClient]
+      seamlessClient = client.asInstanceOf[SeamlessSchwabClient]
+      token <- seamlessClient.ensureAuthenticated()
+      preferences <- SchwabClient.getUserPreference(token.access_token)
+      _ <- Console.printLine(s"✅ User preferences retrieved successfully!")
+      _ <- Console.printLine(s"Preferences: ${preferences.take(200)}...")
+    } yield ()).catchAll { err =>
+      Console.printLineError(s"❌ Failed to get user preferences: ${err.getMessage}")
+    }
+    
+    // NEW SCENARIO: Quick Portfolio Check
+    _ <- Console.printLine("\n0. Quick Portfolio Check - Major ETFs and Tech Stocks...")
+    portfolioSymbols = List("SPY", "QQQ", "IWM", "DIA", "AAPL", "MSFT", "NVDA", "TSLA")
+    portfolioQuotes <- MarketDataService.getQuotes(portfolioSymbols)
+    _ <- Console.printLine("Symbol | Last Price | Change | % Change | Volume")
+    _ <- Console.printLine("-" * 60)
+    _ <- ZIO.foreach(portfolioSymbols) { symbol =>
+      portfolioQuotes.get(symbol) match {
+        case Some(quote) =>
+          val last = quote.last.map(_.toString).getOrElse("N/A")
+          val change = quote.change.map(c => f"$c%.2f").getOrElse("N/A")
+          val pctChange = quote.percentChange.map(p => f"$p%.2f%%").getOrElse("N/A")
+          val volume = quote.volume.map(v => f"$v%,d").getOrElse("N/A")
+          Console.printLine(f"$symbol%-6s | $last%-10s | $change%-7s | $pctChange%-8s | $volume")
+        case None =>
+          Console.printLine(f"$symbol%-6s | No data available")
+      }
+    }
+    
     // Get quotes for multiple symbols
     _ <- Console.printLine("\n1. Getting quotes for AAPL, MSFT, GOOGL...")
     quotes <- MarketDataService.getQuotes(List("AAPL", "MSFT", "GOOGL"))
@@ -73,6 +105,36 @@ object MarketDataExample extends ZIOAppDefault {
           Console.printLine(s"  Option $product: ${if (details.isOpen) "OPEN" else "CLOSED"}")
         }
       case None => ZIO.unit
+    }
+    
+    // NEW TEST: Direct market hours API call using SchwabClient
+    _ <- Console.printLine("\n6b. Testing direct market hours API call using SchwabClient...")
+    _ <- (for {
+      client <- ZIO.service[SchwabClient]
+      seamlessClient = client.asInstanceOf[SeamlessSchwabClient]
+      token <- seamlessClient.ensureAuthenticated()
+      
+      // Test with today's date
+      today = java.time.LocalDate.now()
+      dateStr = today.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
+      endpoint = s"marketdata/v1/markets?markets=EQUITY&date=$dateStr"
+      
+      _ <- Console.printLine(s"  Calling endpoint: $endpoint")
+      response <- client.makeRawApiCall(endpoint, token.access_token)
+      _ <- Console.printLine(s"  Raw response: ${response.take(500)}...")
+      
+      // Try to parse the response
+      _ <- ZIO.attempt {
+        import zio.json.*
+        val parsed = response.fromJson[Map[String, zio.json.ast.Json]]
+        Console.printLine(s"  Parsed successfully: ${parsed}")
+      }.catchAll { err =>
+        Console.printLine(s"  Failed to parse as Map: ${err.getMessage}")
+      }
+      
+      
+    } yield ()).catchAll { err =>
+      Console.printLineError(s"❌ Failed to test market hours endpoint: ${err.getMessage}")
     }
     
     // Search for instruments

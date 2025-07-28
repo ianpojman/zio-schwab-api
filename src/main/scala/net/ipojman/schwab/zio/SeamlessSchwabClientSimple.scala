@@ -27,6 +27,8 @@ class SeamlessSchwabClientSimple(
     underlying.makeApiCall(endpoint, accessToken)
   def makeRawApiCall(endpoint: String, accessToken: String): Task[String] = 
     underlying.makeRawApiCall(endpoint, accessToken)
+  def getUserPreference(accessToken: String): Task[String] = 
+    underlying.getUserPreference(accessToken)
   
   // Enhanced getToken that handles OAuth flow automatically
   def getToken(code: String): Task[TokenResponse] = underlying.getToken(code)

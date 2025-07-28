@@ -27,6 +27,8 @@ class SeamlessSchwabClient(
     underlying.makeApiCall(endpoint, accessToken)
   def makeRawApiCall(endpoint: String, accessToken: String): Task[String] = 
     underlying.makeRawApiCall(endpoint, accessToken)
+  def getUserPreference(accessToken: String): Task[String] = 
+    underlying.getUserPreference(accessToken)
   
   // Enhanced getToken that handles OAuth flow automatically
   def getToken(code: String): Task[TokenResponse] = underlying.getToken(code)
@@ -35,19 +37,38 @@ class SeamlessSchwabClient(
    * Get a valid access token, handling OAuth flow automatically if needed
    */
   def ensureAuthenticated(): Task[TokenResponse] = {
-    tokenStorage.getToken().flatMap {
-      case Some(token) if isTokenValid(token) => 
+    tokenStorage.getTokenWithTimestamp().flatMap {
+      case Some((token, timestamp)) if isTokenValid(token, timestamp) => 
+        ZIO.logInfo("Using existing valid token") *>
         ZIO.succeed(token)
-      case Some(token) if token.refresh_token.isDefined =>
+      case Some((token, _)) if token.refresh_token.isDefined =>
+        ZIO.logInfo("Token invalid/expired, refreshing...") *>
         refreshAndStoreToken(token.refresh_token.get)
-      case _ => 
+      case Some((token, _)) =>
+        ZIO.logInfo("Token exists but no refresh token available, initiating OAuth flow") *>
+        initiateOAuthFlow()
+      case None => 
+        ZIO.logInfo("No token found, initiating OAuth flow") *>
         initiateOAuthFlow()
     }
   }
   
-  private def isTokenValid(token: TokenResponse): Boolean = {
-    // Simple check - in production you'd check expiry time
-    token.access_token.nonEmpty
+  private def isTokenValid(token: TokenResponse, obtainedAt: Long): Boolean = {
+    // Check if token has expired
+    // Schwab tokens expire after expires_in seconds (typically 1800 seconds = 30 minutes)
+    // We'll refresh 5 minutes early to be safe
+    token.expires_in match {
+      case Some(expiresIn) =>
+        val currentTime = java.lang.System.currentTimeMillis() / 1000
+        val expiresAt = obtainedAt + expiresIn
+        val safeExpiresAt = expiresAt - 300 // Refresh 5 minutes early
+        currentTime < safeExpiresAt
+      case None =>
+        // If no expires_in provided, assume token is valid for 25 minutes
+        val currentTime = java.lang.System.currentTimeMillis() / 1000
+        val elapsed = currentTime - obtainedAt
+        elapsed < 1500 // 25 minutes
+    }
   }
   
   private def refreshAndStoreToken(refreshToken: String): Task[TokenResponse] = {
@@ -224,6 +245,19 @@ object BrowserLauncher {
 trait TokenStorage {
   def storeToken(token: TokenResponse): Task[Unit]
   def getToken(): Task[Option[TokenResponse]]
+  def getTokenWithTimestamp(): Task[Option[(TokenResponse, Long)]]
+}
+
+/**
+ * Stored token with timestamp
+ */
+case class StoredToken(token: TokenResponse, obtainedAt: Long)
+
+object StoredToken {
+  implicit val tokenResponseDecoder: JsonDecoder[TokenResponse] = DeriveJsonDecoder.gen[TokenResponse]
+  implicit val tokenResponseEncoder: JsonEncoder[TokenResponse] = DeriveJsonEncoder.gen[TokenResponse]
+  implicit val decoder: JsonDecoder[StoredToken] = DeriveJsonDecoder.gen[StoredToken]
+  implicit val encoder: JsonEncoder[StoredToken] = DeriveJsonEncoder.gen[StoredToken]
 }
 
 /**
@@ -231,12 +265,12 @@ trait TokenStorage {
  */
 class FileTokenStorage(filePath: String = s"${java.lang.System.getProperty("user.home")}/.schwab_token.json") extends TokenStorage {
   
-  implicit val tokenResponseDecoder: JsonDecoder[TokenResponse] = DeriveJsonDecoder.gen[TokenResponse]
-  implicit val tokenResponseEncoder: JsonEncoder[TokenResponse] = DeriveJsonEncoder.gen[TokenResponse]
+  import StoredToken._
   
   override def storeToken(token: TokenResponse): Task[Unit] = {
     ZIO.attempt {
-      val json = token.toJson
+      val storedToken = StoredToken(token, java.lang.System.currentTimeMillis() / 1000)
+      val json = storedToken.toJson
       val file = new File(filePath)
       file.getParentFile.mkdirs()
       val writer = new PrintWriter(file)
@@ -249,11 +283,22 @@ class FileTokenStorage(filePath: String = s"${java.lang.System.getProperty("user
   }
   
   override def getToken(): Task[Option[TokenResponse]] = {
+    getTokenWithTimestamp().map(_.map(_._1))
+  }
+  
+  override def getTokenWithTimestamp(): Task[Option[(TokenResponse, Long)]] = {
     ZIO.attempt {
       val file = new File(filePath)
       if (file.exists()) {
         val content = new String(Files.readAllBytes(Paths.get(filePath)))
-        content.fromJson[TokenResponse].toOption
+        
+        // Try to parse as StoredToken first (new format)
+        content.fromJson[StoredToken].toOption match {
+          case Some(stored) => Some((stored.token, stored.obtainedAt))
+          case None =>
+            // Fall back to old format (just TokenResponse)
+            content.fromJson[TokenResponse].toOption.map(token => (token, 0L))
+        }
       } else {
         None
       }

@@ -49,6 +49,9 @@ trait SchwabClient {
 
   /** Make a raw API call to the Schwab API */
   def makeRawApiCall(endpoint: String, accessToken: String): Task[String]
+  
+  /** Get user preferences including account nicknames */
+  def getUserPreference(accessToken: String): Task[String]
 }
 
 object SchwabClient {
@@ -69,6 +72,9 @@ object SchwabClient {
 
   def makeRawApiCall(endpoint: String, accessToken: String): ZIO[SchwabClient, Throwable, String] =
     ZIO.serviceWithZIO[SchwabClient](_.makeRawApiCall(endpoint, accessToken))
+    
+  def getUserPreference(accessToken: String): ZIO[SchwabClient, Throwable, String] =
+    ZIO.serviceWithZIO[SchwabClient](_.getUserPreference(accessToken))
 
   /**
    * Live implementation of the SchwabClient (basic, no OAuth handling)
@@ -197,5 +203,9 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
       _        <- ZIO.fail(new RuntimeException(s"API error: ${response.status} - $body"))
         .when(response.status.isError)
     } yield body
+  }
+  
+  def getUserPreference(accessToken: String): Task[String] = {
+    makeRawApiCall("trader/v1/userPreference", accessToken)
   }
 }

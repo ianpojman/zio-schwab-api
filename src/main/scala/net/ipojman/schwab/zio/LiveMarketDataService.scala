@@ -260,15 +260,8 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     market: String,
     date: Option[String] = None
   ): Task[MarketHours] = {
-    val queryParams = buildQueryParams("date" -> date)
-    
-    for {
-      token <- client.getAccessToken
-      response <- client.makeApiCall[MarketHours](
-        s"$baseEndpoint/markets/$market$queryParams",
-        token.access_token
-      )
-    } yield response
+    // The API doesn't support getting a single market, so we get all and filter
+    getMarketHours(List(market.toLowerCase), date)
   }
   
   override def getInstruments(
