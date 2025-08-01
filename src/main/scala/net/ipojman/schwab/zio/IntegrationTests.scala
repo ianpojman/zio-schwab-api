@@ -5,10 +5,7 @@ import zio.json.*
 import java.time.ZonedDateTime
 import net.ipojman.schwab.zio.models.OrderStatus
 
-/**
-* Example usage of the MarketDataService, OrderService, and Enhanced OrderService
- */
-object MarketDataExample extends ZIOAppDefault {
+object IntegrationTests extends ZIOAppDefault {
   
   // Example program that demonstrates various market data API calls
   val program = for {
@@ -81,6 +78,35 @@ object MarketDataExample extends ZIOAppDefault {
     _ <- ZIO.foreach(history.candles.take(3)) { candle =>
       Console.printLine(s"  ${new java.util.Date(candle.datetime)}: O=${candle.open} H=${candle.high} L=${candle.low} C=${candle.close}")
     }
+    
+    // Test different minute frequencies
+    _ <- Console.printLine("\n4b. Testing valid minute frequencies for Schwab API...")
+    validFrequencies = List(1, 5, 10, 15, 30)
+    _ <- ZIO.foreach(validFrequencies) { freq =>
+      MarketDataService.getPriceHistory(
+        symbol = "SPY",
+        periodType = Some("day"),
+        period = Some(1),
+        frequencyType = Some("minute"),
+        frequency = Some(freq)
+      ).foldZIO(
+        err => Console.printLine(s"  ❌ ${freq}-minute frequency: FAILED - ${err.getMessage}"),
+        history => Console.printLine(s"  ✅ ${freq}-minute frequency: SUCCESS - ${history.candles.size} candles")
+      )
+    }
+    
+    // Test invalid 60-minute frequency (should fail)
+    _ <- Console.printLine("\n  Testing invalid 60-minute frequency...")
+    _ <- MarketDataService.getPriceHistory(
+      symbol = "SPY",
+      periodType = Some("day"),
+      period = Some(1),
+      frequencyType = Some("minute"),
+      frequency = Some(60)
+    ).foldZIO(
+      err => Console.printLine(s"  ✅ 60-minute frequency correctly failed: ${err.getMessage.take(150)}..."),
+      history => Console.printLine(s"  ❌ 60-minute frequency unexpectedly succeeded with ${history.candles.size} candles")
+    )
     
     // Get market movers
     _ <- Console.printLine("\n5. Getting top movers for S&P 500...")

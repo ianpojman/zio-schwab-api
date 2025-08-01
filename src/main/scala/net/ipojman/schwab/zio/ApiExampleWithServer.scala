@@ -48,12 +48,43 @@ object ApiExampleWithServer extends ZIOAppDefault {
             _         <- Console.printLine("[Schwab API] Auth promise completed, proceeding with API calls")
             _         <- ZIO.logDebug("Auth callback reached, promise signaled")
           } yield Response.html(
-            """
-              |<html><body>
+            """<html>
+              |<head>
+              |  <title>Authentication Successful</title>
+              |  <style>
+              |    body { 
+              |      font-family: Arial, sans-serif; 
+              |      text-align: center; 
+              |      padding: 50px;
+              |      background-color: #f5f5f5;
+              |    }
+              |    h1 { 
+              |      color: #4CAF50; 
+              |      margin-bottom: 20px;
+              |    }
+              |    a {
+              |      display: inline-block;
+              |      padding: 10px 20px;
+              |      background-color: #007bff;
+              |      color: white;
+              |      text-decoration: none;
+              |      border-radius: 5px;
+              |      margin-top: 20px;
+              |    }
+              |    a:hover {
+              |      background-color: #0056b3;
+              |    }
+              |  </style>
+              |</head>
+              |<body>
               |  <h1>Authentication Successful!</h1>
+              |  <p>You have successfully authenticated with Schwab API.</p>
               |  <a href="/api/accounts">View Accounts</a>
-              |</body></html>
-            """.stripMargin
+              |  <script>
+              |    setTimeout(function() { window.close(); }, 3000);
+              |  </script>
+              |</body>
+              |</html>""".stripMargin
           )
         }
 
@@ -70,12 +101,40 @@ object ApiExampleWithServer extends ZIOAppDefault {
             _         <- ZIO.attempt(authCompletedPromise.success(())).ignore
             _         <- Console.printLine("[Schwab API] Auth promise completed, proceeding with API calls")
           } yield Response.html(
-            """
-              |<html><body>
+            """<html>
+              |<head>
+              |  <title>Token Refreshed Successfully</title>
+              |  <style>
+              |    body { 
+              |      font-family: Arial, sans-serif; 
+              |      text-align: center; 
+              |      padding: 50px;
+              |      background-color: #f5f5f5;
+              |    }
+              |    h1 { 
+              |      color: #4CAF50; 
+              |      margin-bottom: 20px;
+              |    }
+              |    a {
+              |      display: inline-block;
+              |      padding: 10px 20px;
+              |      background-color: #007bff;
+              |      color: white;
+              |      text-decoration: none;
+              |      border-radius: 5px;
+              |      margin-top: 20px;
+              |    }
+              |    a:hover {
+              |      background-color: #0056b3;
+              |    }
+              |  </style>
+              |</head>
+              |<body>
               |  <h1>Token Refreshed Successfully</h1>
+              |  <p>Your authentication token has been refreshed.</p>
               |  <a href="/api/accounts">View Accounts</a>
-              |</body></html>
-            """.stripMargin
+              |</body>
+              |</html>""".stripMargin
           )
         }
 

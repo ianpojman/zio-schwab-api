@@ -77,8 +77,8 @@ class SeamlessSchwabClient(
       case Some((token, timestamp)) if !forceRefresh && isTokenValid(token, timestamp) => 
         val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp
         val remaining = token.expires_in.getOrElse(1800) - age.toInt
-        ZIO.logInfo(s"Using existing valid token (age: ${age}s, remaining: ${remaining}s)") *>
-        ZIO.succeed(token)
+        ZIO.logDebug(s"Using existing valid token (age: ${age}s, remaining: ${remaining}s)") *>
+          ZIO.succeed(token)
       case Some((token, timestamp)) if token.refresh_token.isDefined =>
         val reason = if (forceRefresh) "forced refresh" else {
           val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp

@@ -173,13 +173,47 @@ object SchwabHttpsServerComplete extends ZIOAppDefault {
             tokenResponse <- SchwabClient.getToken(codeParam)
             _ <- TokenRepository.storeToken(tokenResponse)
           } yield Response.html(
-            """
-              |<html><head><title>Success</title></head>
+            """<html>
+              |<head>
+              |  <title>Authentication Successful</title>
+              |  <style>
+              |    body { 
+              |      font-family: Arial, sans-serif; 
+              |      text-align: center; 
+              |      padding: 50px;
+              |      background-color: #f5f5f5;
+              |    }
+              |    h1 { 
+              |      color: #4CAF50; 
+              |      margin-bottom: 20px;
+              |    }
+              |    p {
+              |      margin-bottom: 20px;
+              |      color: #666;
+              |    }
+              |    a {
+              |      display: inline-block;
+              |      padding: 10px 20px;
+              |      background-color: #007bff;
+              |      color: white;
+              |      text-decoration: none;
+              |      border-radius: 5px;
+              |      margin-top: 20px;
+              |    }
+              |    a:hover {
+              |      background-color: #0056b3;
+              |    }
+              |  </style>
+              |</head>
               |<body>
               |  <h1>Authentication Successful!</h1>
+              |  <p>You have successfully authenticated with Schwab API.</p>
               |  <a href="/api/accounts">View Accounts</a>
-              |</body></html>
-            """.stripMargin
+              |  <script>
+              |    setTimeout(function() { window.close(); }, 2000);
+              |  </script>
+              |</body>
+              |</html>""".stripMargin
           )
         },
 
