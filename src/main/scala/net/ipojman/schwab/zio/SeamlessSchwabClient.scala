@@ -79,28 +79,37 @@ class SeamlessSchwabClient(
    * @param forceRefresh if true, will refresh the token even if it appears valid
    */
   def ensureAuthenticated(forceRefresh: Boolean = false): Task[TokenResponse] = {
-    tokenStorage.getTokenWithTimestamp().flatMap {
-      case Some((token, timestamp)) if !forceRefresh && isTokenValid(token, timestamp) =>
-        val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp
-        val remaining = token.expires_in.getOrElse(1800) - age.toInt
-        ZIO.logDebug(s"Using existing valid token (age: ${age}s, remaining: ${remaining}s)") *>
-          ZIO.succeed(token)
-      case Some((token, timestamp)) if token.refresh_token.isDefined =>
-        val reason = if (forceRefresh) "forced refresh" else {
-          val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp
-          s"token expired/invalid (age: ${age}s)"
-        }
-        ZIO.logDebug(s"Refreshing token due to: $reason") *>
-          refreshAndStoreToken(token.refresh_token.get).catchAll { err =>
-            ZIO.logError(s"Token refresh failed: ${err.getMessage}. Initiating new OAuth flow...") *>
+    // First check if a refresh is already in progress
+    refreshInProgress.get.flatMap {
+      case Some(promise) if !forceRefresh =>
+        // A refresh is already happening, just wait for it
+        ZIO.logDebug("Token refresh already in progress, waiting for completion...") *>
+        promise.await
+      case _ =>
+        // No refresh in progress or forced refresh requested
+        tokenStorage.getTokenWithTimestamp().flatMap {
+          case Some((token, timestamp)) if !forceRefresh && isTokenValid(token, timestamp) =>
+            val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp
+            val remaining = token.expires_in.getOrElse(1800) - age.toInt
+            ZIO.logDebug(s"Using existing valid token (age: ${age}s, remaining: ${remaining}s)") *>
+              ZIO.succeed(token)
+          case Some((token, timestamp)) if token.refresh_token.isDefined =>
+            val reason = if (forceRefresh) "forced refresh" else {
+              val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp
+              s"token expired/invalid (age: ${age}s)"
+            }
+            ZIO.logDebug(s"Refreshing token due to: $reason") *>
+              refreshAndStoreToken(token.refresh_token.get).catchAll { err =>
+                ZIO.logError(s"Token refresh failed: ${err.getMessage}. Initiating new OAuth flow...") *>
+                synchronizedOAuthFlow()
+              }
+          case Some((token, _)) =>
+            ZIO.logInfo("Token exists but no refresh token available, initiating OAuth flow") *>
             synchronizedOAuthFlow()
-          }
-      case Some((token, _)) =>
-        ZIO.logInfo("Token exists but no refresh token available, initiating OAuth flow") *>
-        synchronizedOAuthFlow()
-      case None =>
-        ZIO.logInfo("No token found, initiating OAuth flow") *>
-        synchronizedOAuthFlow()
+          case None =>
+            ZIO.logInfo("No token found, initiating OAuth flow") *>
+            synchronizedOAuthFlow()
+        }
     }
   }
 
@@ -113,7 +122,10 @@ class SeamlessSchwabClient(
         val currentTime = java.lang.System.currentTimeMillis() / 1000
         val expiresAt = obtainedAt + expiresIn
         val safeExpiresAt = expiresAt - 300 // Refresh 5 minutes early
-        currentTime < safeExpiresAt
+        
+        // Add a small random buffer (0-30 seconds) to prevent thundering herd
+        val randomBuffer = (currentTime % 30).toInt
+        currentTime < (safeExpiresAt - randomBuffer)
       case None =>
         // If no expires_in provided, assume token is valid for 25 minutes
         val currentTime = java.lang.System.currentTimeMillis() / 1000

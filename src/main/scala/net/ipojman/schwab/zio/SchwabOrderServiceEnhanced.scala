@@ -98,7 +98,7 @@ class SchwabOrderServiceEnhancedImpl(
   private def getOrdersFromCache(fromDate: LocalDate, toDate: LocalDate): Task[Option[List[OrderWithFixedChildStrategies]]] = {
     orderCache.get.map { cache =>
       cache.get((fromDate, toDate)).flatMap { case (orders, timestamp) =>
-        val now = System.currentTimeMillis()
+        val now = java.lang.System.currentTimeMillis()
         if (now - timestamp < CACHE_TTL_MS) {
           Some(orders)
         } else {
@@ -109,7 +109,7 @@ class SchwabOrderServiceEnhancedImpl(
   }
   
   private def cacheOrders(fromDate: LocalDate, toDate: LocalDate, orders: List[OrderWithFixedChildStrategies]): Task[Unit] = {
-    orderCache.update(cache => cache + ((fromDate, toDate) -> (orders, System.currentTimeMillis())))
+    orderCache.update(cache => cache + ((fromDate, toDate) -> (orders, java.lang.System.currentTimeMillis())))
   }
   
   private def fetchOrdersFromApi(fromDate: LocalDate, toDate: LocalDate): Task[List[OrderWithFixedChildStrategies]] = {
