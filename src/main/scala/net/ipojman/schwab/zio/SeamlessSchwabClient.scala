@@ -16,18 +16,24 @@ import java.nio.file.{Files, Paths}
 class SeamlessSchwabClient(
   underlying: SchwabClient,
   config: SchwabApiConfig,
-  tokenStorage: TokenStorage
+  tokenStorage: TokenStorage,
+  authSemaphore: Semaphore,
+  authInProgress: Ref[Option[Promise[Throwable, TokenResponse]]],
+  refreshInProgress: Ref[Option[Promise[Throwable, TokenResponse]]]
 ) extends SchwabClient {
   
+  // SSL certificate creation cache to avoid concurrent generation issues
+  @volatile private var sslConfigCache: Option[Server.Config] = None
+
   // Delegate most methods to underlying client
   def authorize: UIO[String] = underlying.authorize
   def refreshToken(refreshToken: String): Task[TokenResponse] = underlying.refreshToken(refreshToken)
   def getAccessToken: Task[TokenResponse] = underlying.getAccessToken
-  def makeApiCall[T: JsonDecoder](endpoint: String, accessToken: String): Task[T] = 
+  def makeApiCall[T: JsonDecoder](endpoint: String, accessToken: String): Task[T] =
     underlying.makeApiCall(endpoint, accessToken)
-  def makeRawApiCall(endpoint: String, accessToken: String): Task[String] = 
+  def makeRawApiCall(endpoint: String, accessToken: String): Task[String] =
     underlying.makeRawApiCall(endpoint, accessToken)
-  
+
   /**
    * Make an API call with automatic retry on 401 errors
    * This will attempt to refresh the token and retry the call once
@@ -45,7 +51,7 @@ class SeamlessSchwabClient(
       }
     } yield result
   }
-  
+
   /**
    * Make a raw API call with automatic retry on 401 errors
    */
@@ -62,19 +68,19 @@ class SeamlessSchwabClient(
       }
     } yield result
   }
-  def getUserPreference(accessToken: String): Task[String] = 
+  def getUserPreference(accessToken: String): Task[String] =
     underlying.getUserPreference(accessToken)
-  
+
   // Enhanced getToken that handles OAuth flow automatically
   def getToken(code: String): Task[TokenResponse] = underlying.getToken(code)
-  
+
   /**
    * Get a valid access token, handling OAuth flow automatically if needed
    * @param forceRefresh if true, will refresh the token even if it appears valid
    */
   def ensureAuthenticated(forceRefresh: Boolean = false): Task[TokenResponse] = {
     tokenStorage.getTokenWithTimestamp().flatMap {
-      case Some((token, timestamp)) if !forceRefresh && isTokenValid(token, timestamp) => 
+      case Some((token, timestamp)) if !forceRefresh && isTokenValid(token, timestamp) =>
         val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp
         val remaining = token.expires_in.getOrElse(1800) - age.toInt
         ZIO.logDebug(s"Using existing valid token (age: ${age}s, remaining: ${remaining}s)") *>
@@ -84,20 +90,20 @@ class SeamlessSchwabClient(
           val age = (java.lang.System.currentTimeMillis() / 1000) - timestamp
           s"token expired/invalid (age: ${age}s)"
         }
-        ZIO.logInfo(s"Refreshing token due to: $reason") *>
-        refreshAndStoreToken(token.refresh_token.get).catchAll { err =>
-          ZIO.logError(s"Token refresh failed: ${err.getMessage}. Initiating new OAuth flow...") *>
-          initiateOAuthFlow()
-        }
+        ZIO.logDebug(s"Refreshing token due to: $reason") *>
+          refreshAndStoreToken(token.refresh_token.get).catchAll { err =>
+            ZIO.logError(s"Token refresh failed: ${err.getMessage}. Initiating new OAuth flow...") *>
+            synchronizedOAuthFlow()
+          }
       case Some((token, _)) =>
         ZIO.logInfo("Token exists but no refresh token available, initiating OAuth flow") *>
-        initiateOAuthFlow()
-      case None => 
+        synchronizedOAuthFlow()
+      case None =>
         ZIO.logInfo("No token found, initiating OAuth flow") *>
-        initiateOAuthFlow()
+        synchronizedOAuthFlow()
     }
   }
-  
+
   private def isTokenValid(token: TokenResponse, obtainedAt: Long): Boolean = {
     // Check if token has expired
     // Schwab tokens expire after expires_in seconds (typically 1800 seconds = 30 minutes)
@@ -115,51 +121,99 @@ class SeamlessSchwabClient(
         elapsed < 1500 // 25 minutes
     }
   }
-  
+
   private def refreshAndStoreToken(refreshToken: String): Task[TokenResponse] = {
-    for {
-      _ <- ZIO.logDebug(s"Attempting to refresh token...")
-      newToken <- underlying.refreshToken(refreshToken).tapBoth(
-        err => ZIO.logError(s"Token refresh failed: ${err.getMessage}"),
-        token => ZIO.logInfo(s"Token refreshed successfully. New expiry: ${token.expires_in.getOrElse(1800)}s")
-      )
-      _ <- tokenStorage.storeToken(newToken)
-      _ <- ZIO.logDebug("New token stored to disk")
-    } yield newToken
+    refreshInProgress.get.flatMap {
+      case Some(promise) =>
+        // Refresh is already in progress, wait for it to complete
+        ZIO.logDebug("Token refresh already in progress, waiting for completion...") *>
+        promise.await
+      case None =>
+        // No refresh in progress, start one
+        for {
+          promise <- Promise.make[Throwable, TokenResponse]
+          _ <- refreshInProgress.set(Some(promise))
+          result <- (for {
+            _ <- ZIO.logDebug(s"Attempting to refresh token...")
+            newToken <- underlying.refreshToken(refreshToken).tapBoth(
+              err => ZIO.logError(s"Token refresh failed: ${err.getMessage}"),
+              token => ZIO.logInfo(s"Token refreshed successfully. New expiry: ${token.expires_in.getOrElse(1800)}s")
+            )
+            _ <- tokenStorage.storeToken(newToken)
+            _ <- ZIO.logDebug("New token stored to disk")
+          } yield newToken).tapBoth(
+            err => promise.fail(err) *> refreshInProgress.set(None),
+            token => promise.succeed(token) *> refreshInProgress.set(None)
+          )
+        } yield result
+    }
   }
   
+  /**
+   * Synchronized OAuth flow that ensures only one authentication process runs at a time
+   */
+  private def synchronizedOAuthFlow(): Task[TokenResponse] = {
+    authInProgress.get.flatMap {
+      case Some(promise) =>
+        // OAuth is already in progress, wait for it to complete
+        ZIO.logDebug("OAuth flow already in progress, waiting for completion...") *>
+        promise.await
+      case None =>
+        // No OAuth in progress, try to start one
+        authSemaphore.withPermit {
+          authInProgress.get.flatMap {
+            case Some(promise) =>
+              // Another thread started OAuth while we were waiting for the semaphore
+              ZIO.logDebug("OAuth flow started by another thread, waiting for completion...") *>
+              promise.await
+            case None =>
+              // We're the first, start OAuth flow
+              for {
+                promise <- Promise.make[Throwable, TokenResponse]
+                _ <- authInProgress.set(Some(promise))
+                result <- initiateOAuthFlow()
+                  .tapBoth(
+                    err => promise.fail(err) *> authInProgress.set(None),
+                    token => promise.succeed(token) *> authInProgress.set(None)
+                  )
+              } yield result
+          }
+        }
+    }
+  }
+
   private def initiateOAuthFlow(): Task[TokenResponse] = {
     for {
       _ <- ZIO.logInfo("Starting OAuth authentication flow...")
-      
+
       // Start embedded HTTP server for OAuth callback
       authCompleted <- Promise.make[Throwable, TokenResponse]
       serverReady <- Promise.make[Throwable, Unit]
       serverFiber <- startAuthServer(authCompleted, serverReady).fork
-      
+
       // Wait for server to be ready before opening browser
       _ <- serverReady.await
         .timeoutFail(new Exception("Server failed to start within 30 seconds"))(30.seconds)
         .tapError(err => ZIO.logError(s"Server startup error: ${err.getMessage}"))
-      
+
       // Open browser to Schwab auth page (no response_type per Schwab support)
       authUrl = s"${config.authUrl}?client_id=${config.clientId}&redirect_uri=${config.redirectUri}"
       _ <- ZIO.logInfo(s"Opening browser for authentication...")
       _ <- BrowserLauncher.openBrowser(authUrl)
-      
+
       // Wait for authentication to complete (with timeout)
       token <- authCompleted.await
         .timeoutFail(new Exception("OAuth authentication timeout (5 minutes)"))(5.minutes)
         .ensuring(serverFiber.interrupt)
-      
+
       _ <- tokenStorage.storeToken(token)
       _ <- ZIO.logInfo("OAuth authentication completed successfully")
     } yield token
   }
-  
+
   private def startAuthServer(authCompleted: Promise[Throwable, TokenResponse], serverReady: Promise[Throwable, Unit]): Task[Unit] = {
     val callbackPath = new URI(config.redirectUri).getPath
-    
+
     // Build the route path dynamically from the callback URL
     val pathSegments = callbackPath.split("/").filter(_.nonEmpty).toList
     val authRoute = pathSegments.foldLeft(Method.GET / Root)((route, segment) => route / segment) ->
@@ -167,11 +221,11 @@ class SeamlessSchwabClient(
         for {
           code <- ZIO.fromOption(req.url.queryParams.getAll("code").headOption)
             .orElseFail(new RuntimeException("Authorization code not found"))
-          
+
           _ <- ZIO.logInfo(s"Received authorization code")
           token <- underlying.getToken(code)
           _ <- authCompleted.succeed(token)
-          
+
         } yield Response.html(
           """<html>
             |<head>
@@ -191,11 +245,11 @@ class SeamlessSchwabClient(
             |</html>""".stripMargin
         )
       }
-    
+
     val uri = new URI(config.redirectUri)
     val isHttps = uri.getScheme == "https"
     val port = uri.getPort match {
-      case -1 => 
+      case -1 =>
         // Extract port from URL if present (e.g., http://localhost:8080/)
         if (uri.getAuthority != null && uri.getAuthority.contains(":")) {
           uri.getAuthority.split(":").last.toInt
@@ -206,23 +260,32 @@ class SeamlessSchwabClient(
         }
       case p => p
     }
-    
+
     for {
       _ <- ZIO.logInfo(s"Starting OAuth callback server on port $port for path: $callbackPath (HTTPS: $isHttps)")
-      
+
       serverConfig <- if (isHttps) {
-        // Create self-signed certificate for HTTPS on Windows
-        import cert.WindowsSSLSetup
-        WindowsSSLSetup.createSelfSignedCertificate("127.0.0.1")
-          .map(sslSetup => Server.Config.default.port(port).ssl(sslSetup.config))
-          .tapBoth(
-            err => ZIO.logError(s"Failed to create SSL certificate: ${err.getMessage}"),
-            _ => ZIO.logInfo("Created self-signed certificate for HTTPS")
-          )
+        sslConfigCache match {
+          case Some(config) =>
+            ZIO.logInfo("Using cached SSL configuration") *>
+            ZIO.succeed(config.port(port))
+          case None =>
+            // Create self-signed certificate for HTTPS on Windows
+            import cert.WindowsSSLSetup
+            WindowsSSLSetup.createSelfSignedCertificate("127.0.0.1", port)
+              .map(sslSetup => Server.Config.default.port(port).ssl(sslSetup.config))
+              .tapBoth(
+                err => ZIO.logError(s"Failed to create SSL certificate: ${err.getMessage}"),
+                config => {
+                  sslConfigCache = Some(config)
+                  ZIO.logInfo("Created and cached self-signed certificate for HTTPS")
+                }
+              )
+        }
       } else {
         ZIO.succeed(Server.Config.default.port(port))
       }
-      
+
       // Start the server in a forked fiber to allow signaling when ready
       serverFiber <- Server.serve(Routes(authRoute).sandbox)
         .provide(
@@ -231,10 +294,10 @@ class SeamlessSchwabClient(
         )
         .tapError(err => ZIO.logError(s"Server startup error: ${err.getMessage}"))
         .fork
-      
+
       // Give the server more time to bind to the port
       _ <- ZIO.sleep(2.seconds)
-      
+
       // Test if the server is listening by attempting to connect
       _ <- testServerConnection(port)
         .retry(Schedule.recurs(10) && Schedule.spaced(500.millis))
@@ -242,12 +305,12 @@ class SeamlessSchwabClient(
           err => ZIO.logError(s"Server failed to start after retries: ${err.getMessage}") *> serverReady.fail(err),
           _ => ZIO.logInfo("OAuth callback server is ready and listening") *> serverReady.succeed(())
         )
-      
+
       // Keep the server running
       _ <- serverFiber.join
     } yield ()
   }
-  
+
   private def testServerConnection(port: Int): Task[Unit] = {
     import java.net.{Socket, InetSocketAddress}
     ZIO.attempt {
@@ -274,13 +337,13 @@ object BrowserLauncher {
         // Fallback for systems where Desktop is not supported
         val os = java.lang.System.getProperty("os.name").toLowerCase
         val process = os match {
-          case s if s.contains("win") => 
+          case s if s.contains("win") =>
             java.lang.Runtime.getRuntime.exec(Array("cmd", "/c", "start", "", url))
-          case s if s.contains("mac") => 
+          case s if s.contains("mac") =>
             java.lang.Runtime.getRuntime.exec(Array("open", url))
-          case s if s.contains("nix") || s.contains("nux") => 
+          case s if s.contains("nix") || s.contains("nux") =>
             java.lang.Runtime.getRuntime.exec(Array("xdg-open", url))
-          case _ => 
+          case _ =>
             throw new UnsupportedOperationException(s"Cannot open browser on OS: $os")
         }
         process.waitFor()
@@ -314,9 +377,9 @@ object StoredToken {
  * File-based token storage
  */
 class FileTokenStorage(filePath: String = s"${java.lang.System.getProperty("user.home")}/.schwab_token.json") extends TokenStorage {
-  
+
   import StoredToken._
-  
+
   override def storeToken(token: TokenResponse): Task[Unit] = {
     ZIO.attempt {
       // Store in new format with timestamp
@@ -332,24 +395,24 @@ class FileTokenStorage(filePath: String = s"${java.lang.System.getProperty("user
       }
     }
   }
-  
+
   override def getToken(): Task[Option[TokenResponse]] = {
     getTokenWithTimestamp().map(_.map(_._1))
   }
-  
+
   override def getTokenWithTimestamp(): Task[Option[(TokenResponse, Long)]] = {
     ZIO.attempt {
       val file = new File(filePath)
       if (file.exists()) {
         val content = new String(Files.readAllBytes(Paths.get(filePath)))
-        
+
         // Parse as StoredToken (new format only)
         content.fromJson[StoredToken].toOption
       } else {
         None
       }
     }.flatMap {
-      case Some(stored) => 
+      case Some(stored) =>
         val currentTime = java.lang.System.currentTimeMillis() / 1000
         val age = currentTime - stored.obtainedAt
         ZIO.logDebug(s"Token loaded from storage. Age: ${age}s, Expires in: ${stored.token.expires_in.getOrElse(1800)}s") *>
@@ -365,20 +428,23 @@ class FileTokenStorage(filePath: String = s"${java.lang.System.getProperty("user
 }
 
 object SeamlessSchwabClient {
-  
+
   /**
    * Create a seamless client layer that handles OAuth automatically
    */
-  val layer: ZLayer[SchwabApiConfig & Client, Nothing, SchwabClient] = 
+  val layer: ZLayer[SchwabApiConfig & Client, Nothing, SchwabClient] =
     ZLayer {
       for {
         config <- ZIO.service[SchwabApiConfig]
         client <- ZIO.service[Client]
         underlying = new LiveSchwabClient(config, client)
         tokenStorage = new FileTokenStorage()
-      } yield new SeamlessSchwabClient(underlying, config, tokenStorage)
+        authSemaphore <- Semaphore.make(1)
+        authInProgress <- Ref.make[Option[Promise[Throwable, TokenResponse]]](None)
+        refreshInProgress <- Ref.make[Option[Promise[Throwable, TokenResponse]]](None)
+      } yield new SeamlessSchwabClient(underlying, config, tokenStorage, authSemaphore, authInProgress, refreshInProgress)
     }
-  
+
   /**
    * Live layer with seamless OAuth - this is what apps should use
    */
@@ -386,7 +452,7 @@ object SeamlessSchwabClient {
     val configAndClient = SchwabApiConfig.live ++ Client.default
     configAndClient >>> layer
   }
-  
+
   /**
    * Ensure authenticated before making API calls
    * @param forceRefresh if true, will refresh the token even if it appears valid
