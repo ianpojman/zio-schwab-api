@@ -46,18 +46,24 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     
     val apiCall = client match {
       case seamless: SeamlessSchwabClient =>
-        // Use the retry mechanism for seamless clients
-        seamless.makeApiCallWithRetry[Map[String, QuoteResponse]](endpoint)
+        // Use the safe retry mechanism for seamless clients
+        seamless.makeApiCallSafeWithRetry[Map[String, QuoteResponse]](endpoint)
       case _ =>
-        // Fallback to standard approach for other clients
+        // Fallback to safe standard approach for other clients
         for {
           token <- getValidToken()
-          response <- client.makeApiCall[Map[String, QuoteResponse]](endpoint, token.access_token)
+          response <- client.makeApiCallSafe[Map[String, QuoteResponse]](endpoint, token.access_token)
         } yield response
     }
     
     for {
-      response <- apiCall
+      apiResponse <- apiCall
+      response <- apiResponse match {
+        case SchwabApiResponse.Success(data) => ZIO.succeed(data)
+        case SchwabApiResponse.Error(errors) =>
+          val errorMessages = errors.map(_.message).mkString(", ")
+          ZIO.fail(new RuntimeException(s"Schwab API error for symbols ${symbols.mkString(",")}: $errorMessages"))
+      }
       // Convert QuoteResponse to simplified Quote
       simplifiedQuotes = response.map { case (symbol, qr) =>
         val qd = qr.quote
@@ -108,18 +114,24 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     
     val apiCall = client match {
       case seamless: SeamlessSchwabClient =>
-        // Use the retry mechanism for seamless clients
-        seamless.makeApiCallWithRetry[Map[String, QuoteResponse]](endpoint)
+        // Use the safe retry mechanism for seamless clients
+        seamless.makeApiCallSafeWithRetry[Map[String, QuoteResponse]](endpoint)
       case _ =>
-        // Fallback to standard approach for other clients
+        // Fallback to safe standard approach for other clients
         for {
           token <- getValidToken()
-          response <- client.makeApiCall[Map[String, QuoteResponse]](endpoint, token.access_token)
+          response <- client.makeApiCallSafe[Map[String, QuoteResponse]](endpoint, token.access_token)
         } yield response
     }
     
     for {
-      response <- apiCall
+      apiResponse <- apiCall
+      response <- apiResponse match {
+        case SchwabApiResponse.Success(data) => ZIO.succeed(data)
+        case SchwabApiResponse.Error(errors) =>
+          val errorMessages = errors.map(_.message).mkString(", ")
+          ZIO.fail(new RuntimeException(s"Schwab API error for symbol $symbol: $errorMessages"))
+      }
       quoteResponse <- ZIO.fromOption(response.get(symbol))
         .orElseFail(new RuntimeException(s"Quote not found for symbol: $symbol"))
       // Convert QuoteResponse to simplified Quote

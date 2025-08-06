@@ -8,6 +8,7 @@ import java.net.URI
 import scala.concurrent.duration.*
 import java.io.{File, PrintWriter}
 import java.nio.file.{Files, Paths}
+import net.ipojman.schwab.zio.models.{SchwabApiResponse, SchwabErrorResponse}
 
 /**
  * Alternative implementation with simpler server readiness approach
@@ -25,6 +26,8 @@ class SeamlessSchwabClientSimple(
   def getAccessToken: Task[TokenResponse] = underlying.getAccessToken
   def makeApiCall[T: JsonDecoder](endpoint: String, accessToken: String): Task[T] = 
     underlying.makeApiCall(endpoint, accessToken)
+  def makeApiCallSafe[T: JsonDecoder](endpoint: String, accessToken: String): Task[SchwabApiResponse[T]] =
+    underlying.makeApiCallSafe(endpoint, accessToken)
   def makeRawApiCall(endpoint: String, accessToken: String): Task[String] = 
     underlying.makeRawApiCall(endpoint, accessToken)
   def getUserPreference(accessToken: String): Task[String] = 

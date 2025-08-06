@@ -5,6 +5,7 @@ import zio.http.*
 import zio.json.*
 import zio.logging.*
 import zio.logging.backend.SLF4J
+import net.ipojman.schwab.zio.models.{SchwabApiResponse, SchwabErrorResponse}
 
 /**
  * Response from Schwab OAuth token endpoint
@@ -47,6 +48,9 @@ trait SchwabClient {
   /** Make an API call to the Schwab API */
   def makeApiCall[T: JsonDecoder](endpoint: String, accessToken: String): Task[T]
 
+  /** Make an API call that can handle both success and error responses */
+  def makeApiCallSafe[T: JsonDecoder](endpoint: String, accessToken: String): Task[SchwabApiResponse[T]]
+
   /** Make a raw API call to the Schwab API */
   def makeRawApiCall(endpoint: String, accessToken: String): Task[String]
   
@@ -69,6 +73,9 @@ object SchwabClient {
 
   def makeApiCall[T: JsonDecoder](endpoint: String, accessToken: String): ZIO[SchwabClient, Throwable, T] =
     ZIO.serviceWithZIO[SchwabClient](_.makeApiCall[T](endpoint, accessToken))
+
+  def makeApiCallSafe[T: JsonDecoder](endpoint: String, accessToken: String): ZIO[SchwabClient, Throwable, SchwabApiResponse[T]] =
+    ZIO.serviceWithZIO[SchwabClient](_.makeApiCallSafe[T](endpoint, accessToken))
 
   def makeRawApiCall(endpoint: String, accessToken: String): ZIO[SchwabClient, Throwable, String] =
     ZIO.serviceWithZIO[SchwabClient](_.makeRawApiCall(endpoint, accessToken))
@@ -181,6 +188,26 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
       ZIO.logDebug(s"Raw API response: $response") *>
       ZIO.fromEither(response.fromJson[T])
         .mapError(err => new RuntimeException(s"Failed to parse API response: $err\nRaw response: ${response.take(1000)}..."))
+    }
+  }
+
+  def makeApiCallSafe[T: JsonDecoder](endpoint: String, accessToken: String): Task[SchwabApiResponse[T]] = {
+    makeRawApiCall(endpoint, accessToken).flatMap { response =>
+      ZIO.logDebug(s"Raw API response: $response") *> {
+        // First try to parse as error response
+        response.fromJson[SchwabErrorResponse] match {
+          case Right(errorResponse) =>
+            ZIO.logWarning(s"Schwab API returned error response: ${errorResponse.errors.map(_.message).mkString(", ")}") *>
+            ZIO.succeed(SchwabApiResponse.Error(errorResponse.errors))
+          case Left(_) =>
+            // Not an error response, try to parse as success type
+            ZIO.fromEither(response.fromJson[T])
+              .mapBoth(
+                err => new RuntimeException(s"Failed to parse API response as both error and success types: $err\nRaw response: ${response.take(1000)}..."),
+                data => SchwabApiResponse.Success(data)
+              )
+        }
+      }
     }
   }
 

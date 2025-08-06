@@ -8,6 +8,7 @@ import java.net.URI
 import scala.concurrent.duration.*
 import java.io.{File, PrintWriter}
 import java.nio.file.{Files, Paths}
+import net.ipojman.schwab.zio.models.{SchwabApiResponse, SchwabErrorResponse}
 
 /**
  * A Schwab client that handles OAuth authentication seamlessly
@@ -31,6 +32,8 @@ class SeamlessSchwabClient(
   def getAccessToken: Task[TokenResponse] = underlying.getAccessToken
   def makeApiCall[T: JsonDecoder](endpoint: String, accessToken: String): Task[T] =
     underlying.makeApiCall(endpoint, accessToken)
+  def makeApiCallSafe[T: JsonDecoder](endpoint: String, accessToken: String): Task[SchwabApiResponse[T]] =
+    underlying.makeApiCallSafe(endpoint, accessToken)
   def makeRawApiCall(endpoint: String, accessToken: String): Task[String] =
     underlying.makeRawApiCall(endpoint, accessToken)
 
@@ -47,6 +50,24 @@ class SeamlessSchwabClient(
           ensureAuthenticated(forceRefresh = true).flatMap { newToken =>
             ZIO.logInfo(s"Retrying $endpoint with refreshed token...") *>
             makeApiCall[T](endpoint, newToken.access_token)
+          }
+      }
+    } yield result
+  }
+
+  /**
+   * Make a safe API call with automatic retry on 401 errors
+   * This returns a SchwabApiResponse that can handle both success and error responses
+   */
+  def makeApiCallSafeWithRetry[T: JsonDecoder](endpoint: String): Task[SchwabApiResponse[T]] = {
+    for {
+      token <- ensureAuthenticated()
+      result <- makeApiCallSafe[T](endpoint, token.access_token).catchSome {
+        case e: RuntimeException if e.getMessage.contains("401") =>
+          ZIO.logInfo(s"Received 401 error for $endpoint, forcing token refresh...") *>
+          ensureAuthenticated(forceRefresh = true).flatMap { newToken =>
+            ZIO.logInfo(s"Retrying $endpoint with refreshed token...") *>
+            makeApiCallSafe[T](endpoint, newToken.access_token)
           }
       }
     } yield result

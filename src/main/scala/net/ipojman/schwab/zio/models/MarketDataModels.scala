@@ -2,6 +2,46 @@ package net.ipojman.schwab.zio.models
 
 import zio.json.*
 
+// Error response models for Schwab API
+case class SchwabApiError(
+  message: String,
+  id: Option[String] = None
+)
+
+object SchwabApiError {
+  implicit val decoder: JsonDecoder[SchwabApiError] = DeriveJsonDecoder.gen[SchwabApiError]
+  implicit val encoder: JsonEncoder[SchwabApiError] = DeriveJsonEncoder.gen[SchwabApiError]
+}
+
+case class SchwabErrorResponse(
+  errors: List[SchwabApiError]
+)
+
+object SchwabErrorResponse {
+  implicit val decoder: JsonDecoder[SchwabErrorResponse] = DeriveJsonDecoder.gen[SchwabErrorResponse]
+  implicit val encoder: JsonEncoder[SchwabErrorResponse] = DeriveJsonEncoder.gen[SchwabErrorResponse]
+}
+
+// API response wrapper that can handle both success and error responses
+sealed trait SchwabApiResponse[+T]
+
+object SchwabApiResponse {
+  case class Success[T](data: T) extends SchwabApiResponse[T]
+  case class Error(errors: List[SchwabApiError]) extends SchwabApiResponse[Nothing]
+
+  // Helper methods for creating responses
+  def success[T](data: T): SchwabApiResponse[T] = Success(data)
+  def error(errors: List[SchwabApiError]): SchwabApiResponse[Nothing] = Error(errors)
+  def error(message: String, id: Option[String] = None): SchwabApiResponse[Nothing] = 
+    Error(List(SchwabApiError(message, id)))
+
+  // Pattern matching helpers
+  def fromEither[T](either: Either[SchwabErrorResponse, T]): SchwabApiResponse[T] = either match {
+    case Right(data) => Success(data)
+    case Left(errorResponse) => Error(errorResponse.errors)
+  }
+}
+
 // Quote wrapper that matches the actual API response structure
 case class QuoteResponse(
   assetMainType: Option[String] = None,
