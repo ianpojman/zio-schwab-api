@@ -546,3 +546,51 @@ object OptionExpirationChain {
   implicit val decoder: JsonDecoder[OptionExpirationChain] = DeriveJsonDecoder.gen[OptionExpirationChain]
   implicit val encoder: JsonEncoder[OptionExpirationChain] = DeriveJsonEncoder.gen[OptionExpirationChain]
 }
+// ---------------------------------------------------------------------------
+// Detailed /quotes result (mixed responses)
+//
+// GET /marketdata/v1/quotes answers a partially-bad symbol list with the good
+// quotes AND an "errors" object naming the rejects:
+//
+//   { "AAPL": {...}, "errors": { "invalidSymbols": ["VSCO"] } }
+//
+// Decoding that straight into Map[String, QuoteResponse] fails, because the
+// "errors" value has no `symbol` field, and the whole batch is lost. This type
+// keeps the good quotes and names the rejects so a caller can quarantine them.
+case class QuotesErrors(invalidSymbols: List[String] = Nil)
+
+object QuotesErrors {
+  implicit val decoder: JsonDecoder[QuotesErrors] = DeriveJsonDecoder.gen[QuotesErrors]
+  implicit val encoder: JsonEncoder[QuotesErrors] = DeriveJsonEncoder.gen[QuotesErrors]
+}
+
+case class QuotesResult(
+  quotes: Map[String, Quote],
+  invalidSymbols: List[String] = Nil
+)
+
+// The raw shape as it comes off the wire, before QuoteResponse is flattened
+// into Quote. Decoded permissively: every key that is not "errors" is a symbol,
+// and a key that fails to decode as a QuoteResponse is dropped rather than
+// failing the batch.
+case class QuotesEnvelope(
+  quotes: Map[String, QuoteResponse],
+  invalidSymbols: List[String]
+)
+
+object QuotesEnvelope {
+  import zio.json.ast.Json
+
+  implicit val decoder: JsonDecoder[QuotesEnvelope] =
+    JsonDecoder[Map[String, Json]].map { fields =>
+      val invalid = fields
+        .get("errors")
+        .flatMap(_.as[QuotesErrors].toOption)
+        .map(_.invalidSymbols)
+        .getOrElse(Nil)
+      val quotes = (fields - "errors").flatMap { case (symbol, json) =>
+        json.as[QuoteResponse].toOption.map(symbol -> _)
+      }
+      QuotesEnvelope(quotes, invalid)
+    }
+}
