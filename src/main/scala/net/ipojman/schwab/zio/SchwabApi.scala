@@ -218,7 +218,7 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
     makeRawApiCall(endpoint, accessToken).flatMap { response =>
       ZIO.logDebug(s"API response body length: ${response.length}") *>
       ZIO.fromEither(response.fromJson[T])
-        .mapError(err => new RuntimeException(s"Failed to parse API response: $err\nRaw response: ${response.take(1000)}..."))
+        .mapError(err => new RuntimeException(s"Failed to parse API response: $err (response body length: ${response.length})"))
     }
   }
 
@@ -234,7 +234,7 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
             // Not an error response, try to parse as success type
             ZIO.fromEither(response.fromJson[T])
               .mapBoth(
-                err => new RuntimeException(s"Failed to parse API response as both error and success types: $err\nRaw response: ${response.take(1000)}..."),
+                err => new RuntimeException(s"Failed to parse API response as both error and success types: $err (response body length: ${response.length})"),
                 data => SchwabApiResponse.Success(data)
               )
         }
