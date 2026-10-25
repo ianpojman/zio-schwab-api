@@ -177,7 +177,7 @@ class SchwabOrderServiceEnhancedImpl(
         .catchAll { err =>
           // If parsing fails, log the raw JSON for debugging
           ZIO.logError(s"Failed to parse orders JSON. Error: ${err.getMessage}") *>
-          ZIO.logDebug(s"Raw JSON response (first 1000 chars): ${ordersJson.take(1000)}") *>
+          ZIO.logDebug(s"Raw JSON response length: ${ordersJson.length}") *>
           // Try parsing with the original Order model as fallback
           ZIO.fromEither(ordersJson.fromJson[List[Order]])
             .map { standardOrders =>

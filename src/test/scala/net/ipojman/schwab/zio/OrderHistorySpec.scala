@@ -8,8 +8,9 @@ import net.ipojman.schwab.zio.models.OrderStatus
 
 object OrderHistorySpec extends ZIOSpecDefault {
   
+  // These tests call the live broker and need a signed-in token, so the suite is ignored in the default run.
   def spec = suite("OrderHistorySpec")(
-    test("load 6 months of PM orders") {
+    test("load 6 months of sample-symbol orders") {
       for {
         // Calculate date range
         today <- ZIO.succeed(LocalDate.now())
@@ -18,18 +19,18 @@ object OrderHistorySpec extends ZIOSpecDefault {
         // Get orders
         orderService <- ZIO.service[SchwabOrderServiceEnhanced]
         orders <- orderService.getOrdersForSymbol(
-          symbol = "PM",
+          symbol = "XYZ",
           fromDate = sixMonthsAgo,
           toDate = today
         )
         
         // Basic assertions
-        _ <- TestConsole.printLine(s"Found ${orders.size} PM orders in the past 6 months")
+        _ <- Console.printLine(s"Found ${orders.size} sample-symbol orders in the past 6 months")
         
         // Group by status for analysis
         ordersByStatus = orders.groupBy(_.status)
         _ <- ZIO.foreach(ordersByStatus.toList) { case (status, statusOrders) =>
-          TestConsole.printLine(s"  $status: ${statusOrders.size} orders")
+          Console.printLine(s"  $status: ${statusOrders.size} orders")
         }
         
         // Additional metrics
@@ -37,14 +38,14 @@ object OrderHistorySpec extends ZIOSpecDefault {
         buyOrders = filledOrders.filter(_.instruction == "BUY")
         sellOrders = filledOrders.filter(_.instruction == "SELL")
         
-        _ <- TestConsole.printLine(s"  Filled: ${filledOrders.size}")
-        _ <- TestConsole.printLine(s"  Buy orders: ${buyOrders.size}")
-        _ <- TestConsole.printLine(s"  Sell orders: ${sellOrders.size}")
+        _ <- Console.printLine(s"  Filled: ${filledOrders.size}")
+        _ <- Console.printLine(s"  Buy orders: ${buyOrders.size}")
+        _ <- Console.printLine(s"  Sell orders: ${sellOrders.size}")
         
       } yield {
         // Assert that we can successfully retrieve orders
         assert(orders)(isNonEmpty) && 
-        assert(orders.forall(_.symbol.contains("PM")))(isTrue)
+        assert(orders.forall(_.symbol.contains("XYZ")))(isTrue)
       }
     }.provide(
       SeamlessSchwabClient.live,
@@ -59,13 +60,13 @@ object OrderHistorySpec extends ZIOSpecDefault {
         
         orderService <- ZIO.service[SchwabOrderServiceEnhanced]
         orders <- orderService.getOrdersForSymbol(
-          symbol = "PM",
+          symbol = "XYZ",
           fromDate = startDate,
           toDate = endDate
         )
         
         // Verify all orders are within the date range
-        orderDates = orders.map(order => LocalDate.parse(order.enteredTime.substring(0, 10)))
+        orderDates = orders.map(order => order.enteredTime.toLocalDate)
         
       } yield {
         assert(orderDates.forall(date => 
@@ -77,16 +78,16 @@ object OrderHistorySpec extends ZIOSpecDefault {
       SchwabOrderServiceEnhanced.layer
     ) @@ TestAspect.timeout(60.seconds),
     
-    test("analyze PM trading metrics") {
+    test("analyze sample-symbol trading metrics") {
       for {
         today <- ZIO.succeed(LocalDate.now())
         sixMonthsAgo <- ZIO.succeed(today.minusMonths(6))
         
-        orders <- SchwabOrderServiceEnhanced.getOrdersForSymbol(
-          symbol = "PM",
+        orders <- ZIO.serviceWithZIO[SchwabOrderServiceEnhanced](_.getOrdersForSymbol(
+          symbol = "XYZ",
           fromDate = sixMonthsAgo,
           toDate = today
-        )
+        ))
         
         filledOrders = orders.filter(_.status == OrderStatus.Filled)
         
@@ -103,10 +104,10 @@ object OrderHistorySpec extends ZIOSpecDefault {
         
         netPosition = totalBuyQuantity - totalSellQuantity
         
-        _ <- TestConsole.printLine(f"PM Trading Summary (6 months):")
-        _ <- TestConsole.printLine(f"  Total bought: ${totalBuyQuantity}%.0f shares")
-        _ <- TestConsole.printLine(f"  Total sold: ${totalSellQuantity}%.0f shares")
-        _ <- TestConsole.printLine(f"  Net position change: ${netPosition}%.0f shares")
+        _ <- Console.printLine(f"XYZ Trading Summary (6 months):")
+        _ <- Console.printLine(f"  Total bought: ${totalBuyQuantity}%.0f shares")
+        _ <- Console.printLine(f"  Total sold: ${totalSellQuantity}%.0f shares")
+        _ <- Console.printLine(f"  Net position change: ${netPosition}%.0f shares")
         
       } yield {
         // Verify calculations are non-negative
@@ -117,5 +118,5 @@ object OrderHistorySpec extends ZIOSpecDefault {
       SeamlessSchwabClient.live,
       SchwabOrderServiceEnhanced.layer
     ) @@ TestAspect.timeout(60.seconds)
-  )
+  ) @@ TestAspect.ignore
 }

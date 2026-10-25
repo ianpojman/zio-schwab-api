@@ -216,15 +216,15 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
 
   def makeApiCall[T: JsonDecoder](endpoint: String, accessToken: String): Task[T] = {
     makeRawApiCall(endpoint, accessToken).flatMap { response =>
-      ZIO.logDebug(s"Raw API response: $response") *>
+      ZIO.logDebug(s"API response body length: ${response.length}") *>
       ZIO.fromEither(response.fromJson[T])
-        .mapError(err => new RuntimeException(s"Failed to parse API response: $err\nRaw response: ${response.take(1000)}..."))
+        .mapError(err => new RuntimeException(s"Failed to parse API response: $err (response body length: ${response.length})"))
     }
   }
 
   def makeApiCallSafe[T: JsonDecoder](endpoint: String, accessToken: String): Task[SchwabApiResponse[T]] = {
     makeRawApiCall(endpoint, accessToken).flatMap { response =>
-      ZIO.logDebug(s"Raw API response: $response") *> {
+      ZIO.logDebug(s"API response body length: ${response.length}") *> {
         // First try to parse as error response
         response.fromJson[SchwabErrorResponse] match {
           case Right(errorResponse) =>
@@ -234,7 +234,7 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
             // Not an error response, try to parse as success type
             ZIO.fromEither(response.fromJson[T])
               .mapBoth(
-                err => new RuntimeException(s"Failed to parse API response as both error and success types: $err\nRaw response: ${response.take(1000)}..."),
+                err => new RuntimeException(s"Failed to parse API response as both error and success types: $err (response body length: ${response.length})"),
                 data => SchwabApiResponse.Success(data)
               )
         }
@@ -261,7 +261,7 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
           ZIO.logError(s"API error: ${response.status} for URL: ${LiveSchwabClient.maskAccount(fullUrl)} - Response body: $body")
         }
       )
-      _        <- ZIO.logTrace(s"API response body: $body")
+      _        <- ZIO.logTrace(s"API response body length: ${body.length}")
       _        <- ZIO.fail(new RuntimeException(s"API error: ${response.status} for URL: ${LiveSchwabClient.maskAccount(fullUrl)} - Response body: $body"))
         .when(response.status.isError)
     } yield body
