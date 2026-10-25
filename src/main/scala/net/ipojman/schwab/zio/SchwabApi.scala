@@ -56,7 +56,41 @@ trait SchwabClient {
   
   /** Get user preferences including account nicknames */
   def getUserPreference(accessToken: String): Task[String]
+
+  /**
+   * Send a write call (POST, PUT or DELETE) to the Schwab API, once.
+   *
+   * A non-2xx reply fails with [[SchwabHttpError]]. Nothing here retries: a write the
+   * broker may have acted on must not be sent twice.
+   *
+   * The default fails, so a client that only wraps the read calls refuses writes
+   * until it overrides this.
+   *
+   * @param jsonBody the JSON request body, or None for a call without one (DELETE)
+   */
+  def makeWriteApiCall(
+    method: Method,
+    endpoint: String,
+    accessToken: String,
+    jsonBody: Option[String]
+  ): Task[ApiWriteResponse] =
+    ZIO.fail(new UnsupportedOperationException(s"${getClass.getSimpleName} does not send write calls"))
 }
+
+/**
+ * Reply to a write call that came back 2xx.
+ *
+ * @param status the HTTP status code
+ * @param location the Location header, which for a placed order names the new order
+ * @param body the response body, often empty
+ */
+case class ApiWriteResponse(status: Int, location: Option[String], body: String)
+
+/**
+ * A non-2xx reply from the Schwab API, with its status code and body.
+ */
+class SchwabHttpError(val status: Int, val url: String, val body: String)
+  extends RuntimeException(s"API error: $status for URL: $url - Response body: $body")
 
 object SchwabClient {
   def authorize: ZIO[SchwabClient, Throwable, String] =
@@ -239,4 +273,45 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
   def getUserPreference(accessToken: String): Task[String] = {
     makeRawApiCall("trader/v1/userPreference", accessToken)
   }
+
+  override def makeWriteApiCall(
+    method: Method,
+    endpoint: String,
+    accessToken: String,
+    jsonBody: Option[String]
+  ): Task[ApiWriteResponse] = {
+    val fullUrl = s"${config.apiBaseUrl}/${endpoint.stripPrefix("/")}"
+    for {
+      request  <- LiveSchwabClient.writeRequest(method, fullUrl, accessToken, jsonBody)
+      _        <- ZIO.logDebug(s"Making Schwab API write call: $method $fullUrl")
+      response <- client.request(request).provide(ZLayer.succeed(Scope.global))
+      result   <- LiveSchwabClient.readWriteResponse(fullUrl, response)
+    } yield result
+  }
+}
+
+object LiveSchwabClient {
+
+  /** Build the request for a write call: bearer token, and a JSON body when there is one. */
+  def writeRequest(method: Method, fullUrl: String, accessToken: String, jsonBody: Option[String]): Task[Request] =
+    ZIO.fromEither(URL.decode(fullUrl)).map { url =>
+      val bare = Request(method = method, url = url)
+        .addHeader(Header.Authorization.Bearer(accessToken))
+        .addHeader(Header.Accept(MediaType.application.json))
+      jsonBody match {
+        case Some(json) =>
+          bare.addHeader(Header.ContentType(MediaType.application.json)).copy(body = Body.fromString(json))
+        case None => bare
+      }
+    }
+
+  /** Turn a write call's reply into an [[ApiWriteResponse]], or fail with [[SchwabHttpError]] on a non-2xx status. */
+  def readWriteResponse(fullUrl: String, response: Response): Task[ApiWriteResponse] =
+    for {
+      body <- response.body.asString
+      _    <- ZIO.when(!response.status.isSuccess)(
+                ZIO.logError(s"API error: ${response.status.code} for URL: $fullUrl - Response body: $body") *>
+                ZIO.fail(new SchwabHttpError(response.status.code, fullUrl, body))
+              )
+    } yield ApiWriteResponse(response.status.code, response.rawHeader("Location"), body)
 }

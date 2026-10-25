@@ -37,6 +37,16 @@ class SeamlessSchwabClient(
   def makeRawApiCall(endpoint: String, accessToken: String): Task[String] =
     underlying.makeRawApiCall(endpoint, accessToken)
 
+  // Writes go straight through, with no retry on 401: a write the broker may have
+  // acted on must not be sent twice.
+  override def makeWriteApiCall(
+    method: Method,
+    endpoint: String,
+    accessToken: String,
+    jsonBody: Option[String]
+  ): Task[ApiWriteResponse] =
+    underlying.makeWriteApiCall(method, endpoint, accessToken, jsonBody)
+
   /**
    * Make an API call with automatic retry on 401 errors
    * This will attempt to refresh the token and retry the call once
