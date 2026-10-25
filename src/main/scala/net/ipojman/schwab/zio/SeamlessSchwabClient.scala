@@ -56,9 +56,9 @@ class SeamlessSchwabClient(
       token <- ensureAuthenticated()
       result <- makeApiCall[T](endpoint, token.access_token).catchSome {
         case e: RuntimeException if e.getMessage.contains("401") =>
-          ZIO.logInfo(s"Received 401 error for $endpoint, forcing token refresh...") *>
+          ZIO.logInfo(s"Received 401 error for ${LiveSchwabClient.maskAccount(endpoint)}, forcing token refresh...") *>
           ensureAuthenticated(forceRefresh = true).flatMap { newToken =>
-            ZIO.logInfo(s"Retrying $endpoint with refreshed token...") *>
+            ZIO.logInfo(s"Retrying ${LiveSchwabClient.maskAccount(endpoint)} with refreshed token...") *>
             makeApiCall[T](endpoint, newToken.access_token)
           }
       }
@@ -74,9 +74,9 @@ class SeamlessSchwabClient(
       token <- ensureAuthenticated()
       result <- makeApiCallSafe[T](endpoint, token.access_token).catchSome {
         case e: RuntimeException if e.getMessage.contains("401") =>
-          ZIO.logInfo(s"Received 401 error for $endpoint, forcing token refresh...") *>
+          ZIO.logInfo(s"Received 401 error for ${LiveSchwabClient.maskAccount(endpoint)}, forcing token refresh...") *>
           ensureAuthenticated(forceRefresh = true).flatMap { newToken =>
-            ZIO.logInfo(s"Retrying $endpoint with refreshed token...") *>
+            ZIO.logInfo(s"Retrying ${LiveSchwabClient.maskAccount(endpoint)} with refreshed token...") *>
             makeApiCallSafe[T](endpoint, newToken.access_token)
           }
       }
@@ -91,9 +91,9 @@ class SeamlessSchwabClient(
       token <- ensureAuthenticated()
       result <- makeRawApiCall(endpoint, token.access_token).catchSome {
         case e: RuntimeException if e.getMessage.contains("401") =>
-          ZIO.logInfo(s"Received 401 error for $endpoint, forcing token refresh...") *>
+          ZIO.logInfo(s"Received 401 error for ${LiveSchwabClient.maskAccount(endpoint)}, forcing token refresh...") *>
           ensureAuthenticated(forceRefresh = true).flatMap { newToken =>
-            ZIO.logInfo(s"Retrying $endpoint with refreshed token...") *>
+            ZIO.logInfo(s"Retrying ${LiveSchwabClient.maskAccount(endpoint)} with refreshed token...") *>
             makeRawApiCall(endpoint, newToken.access_token)
           }
       }
