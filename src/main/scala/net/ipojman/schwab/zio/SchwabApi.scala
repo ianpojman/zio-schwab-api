@@ -283,7 +283,7 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
     val fullUrl = s"${config.apiBaseUrl}/${endpoint.stripPrefix("/")}"
     for {
       request  <- LiveSchwabClient.writeRequest(method, fullUrl, accessToken, jsonBody)
-      _        <- ZIO.logDebug(s"Making Schwab API write call: $method $fullUrl")
+      _        <- ZIO.logDebug(s"Making Schwab API write call: $method ${LiveSchwabClient.maskAccount(fullUrl)}")
       response <- client.request(request).provide(ZLayer.succeed(Scope.global))
       result   <- LiveSchwabClient.readWriteResponse(fullUrl, response)
     } yield result
@@ -291,6 +291,12 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
 }
 
 object LiveSchwabClient {
+
+  /**
+   * `url` with the path segment after `accounts/` replaced by a fixed mask, for log lines. On the trader paths that
+   * segment is the account hash, which identifies the account and does not belong in a log.
+   */
+  def maskAccount(url: String): String = url.replaceAll("(/accounts/)[^/?#]+", "$1***")
 
   /** Build the request for a write call: bearer token, and a JSON body when there is one. */
   def writeRequest(method: Method, fullUrl: String, accessToken: String, jsonBody: Option[String]): Task[Request] =
@@ -310,7 +316,7 @@ object LiveSchwabClient {
     for {
       body <- response.body.asString
       _    <- ZIO.when(!response.status.isSuccess)(
-                ZIO.logError(s"API error: ${response.status.code} for URL: $fullUrl - Response body: $body") *>
+                ZIO.logError(s"API error: ${response.status.code} for URL: ${maskAccount(fullUrl)} - Response body: $body") *>
                 ZIO.fail(new SchwabHttpError(response.status.code, fullUrl, body))
               )
     } yield ApiWriteResponse(response.status.code, response.rawHeader("Location"), body)
