@@ -30,6 +30,84 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
     }
   }
   
+  /**
+   * Flatten the wire-shape QuoteResponse into the simplified Quote.
+   * Quote data first, then extended, then regular-market as fallback.
+   */
+  private def toQuote(symbol: String, qr: QuoteResponse): Quote = {
+    val qd = qr.quote
+    val ext = qr.extended
+    val reg = qr.regular
+
+    Quote(
+      symbol = symbol,
+      bid = qd.flatMap(_.bidPrice).orElse(ext.flatMap(_.bidPrice)),
+      ask = qd.flatMap(_.askPrice).orElse(ext.flatMap(_.askPrice)),
+      last = qd.flatMap(_.lastPrice).orElse(ext.flatMap(_.lastPrice)).orElse(reg.flatMap(_.regularMarketLastPrice)),
+      open = qd.flatMap(_.openPrice),
+      high = qd.flatMap(_.highPrice),
+      low = qd.flatMap(_.lowPrice),
+      close = qd.flatMap(_.closePrice),
+      volume = qd.flatMap(_.totalVolume).orElse(ext.flatMap(_.totalVolume)),
+      quoteTime = qd.flatMap(_.quoteTime).orElse(ext.flatMap(_.quoteTime)),
+      bidSize = qd.flatMap(_.bidSize).orElse(ext.flatMap(_.bidSize)),
+      askSize = qd.flatMap(_.askSize).orElse(ext.flatMap(_.askSize)),
+      mark = qd.flatMap(_.mark).orElse(ext.flatMap(_.mark)),
+      change = qd.flatMap(_.netChange).orElse(reg.flatMap(_.regularMarketNetChange)),
+      percentChange = qd.flatMap(_.netPercentChange).orElse(reg.flatMap(_.regularMarketPercentChange)),
+      fiftyTwoWeekHigh = qd.flatMap(_.`52WeekHigh`),
+      fiftyTwoWeekLow = qd.flatMap(_.`52WeekLow`),
+      openInterest = qd.flatMap(_.openInterest),
+      volatility = qd.flatMap(_.volatility),
+      moneyIntrinsicValue = qd.flatMap(_.moneyIntrinsicValue),
+      timeValue = qd.flatMap(_.timeValue),
+      delta = qd.flatMap(_.delta),
+      gamma = qd.flatMap(_.gamma),
+      theta = qd.flatMap(_.theta),
+      vega = qd.flatMap(_.vega),
+      rho = qd.flatMap(_.rho),
+      theoreticalOptionValue = qd.flatMap(_.theoreticalOptionValue),
+      underlyingPrice = qd.flatMap(_.underlyingPrice)
+    )
+  }
+
+  override def getQuotesDetailed(
+    symbols: List[String],
+    fields: Option[String] = None,
+    indicative: Boolean = false
+  ): Task[QuotesResult] = {
+    val queryParams = buildQueryParams(
+      "symbols" -> Some(symbols.mkString(",")),
+      "fields" -> fields,
+      "indicative" -> (if (indicative) Some(true) else None)
+    )
+
+    val endpoint = s"$baseEndpoint/quotes$queryParams"
+
+    val apiCall = client match {
+      case seamless: SeamlessSchwabClient =>
+        seamless.makeApiCallSafeWithRetry[QuotesEnvelope](endpoint)
+      case _ =>
+        for {
+          token <- getValidToken()
+          response <- client.makeApiCallSafe[QuotesEnvelope](endpoint, token.access_token)
+        } yield response
+    }
+
+    for {
+      apiResponse <- apiCall
+      envelope <- apiResponse match {
+        case SchwabApiResponse.Success(data) => ZIO.succeed(data)
+        case SchwabApiResponse.Error(errors) =>
+          val errorMessages = errors.map(_.message).mkString(", ")
+          ZIO.fail(new RuntimeException(s"Schwab API error for symbols ${symbols.mkString(",")}: $errorMessages"))
+      }
+    } yield QuotesResult(
+      quotes = envelope.quotes.map { case (symbol, qr) => symbol -> toQuote(symbol, qr) },
+      invalidSymbols = envelope.invalidSymbols
+    )
+  }
+
   override def getQuotes(
     symbols: List[String], 
     fields: Option[String] = None,
@@ -64,44 +142,7 @@ case class LiveMarketDataService(client: SchwabClient) extends MarketDataService
           val errorMessages = errors.map(_.message).mkString(", ")
           ZIO.fail(new RuntimeException(s"Schwab API error for symbols ${symbols.mkString(",")}: $errorMessages"))
       }
-      // Convert QuoteResponse to simplified Quote
-      simplifiedQuotes = response.map { case (symbol, qr) =>
-        val qd = qr.quote
-        val ext = qr.extended
-        val reg = qr.regular
-        
-        // Use quote data first, then extended, then regular market data as fallback
-        symbol -> Quote(
-          symbol = symbol,
-          bid = qd.flatMap(_.bidPrice).orElse(ext.flatMap(_.bidPrice)),
-          ask = qd.flatMap(_.askPrice).orElse(ext.flatMap(_.askPrice)),
-          last = qd.flatMap(_.lastPrice).orElse(ext.flatMap(_.lastPrice)).orElse(reg.flatMap(_.regularMarketLastPrice)),
-          open = qd.flatMap(_.openPrice),
-          high = qd.flatMap(_.highPrice),
-          low = qd.flatMap(_.lowPrice),
-          close = qd.flatMap(_.closePrice),
-          volume = qd.flatMap(_.totalVolume).orElse(ext.flatMap(_.totalVolume)),
-          quoteTime = qd.flatMap(_.quoteTime).orElse(ext.flatMap(_.quoteTime)),
-          bidSize = qd.flatMap(_.bidSize).orElse(ext.flatMap(_.bidSize)),
-          askSize = qd.flatMap(_.askSize).orElse(ext.flatMap(_.askSize)),
-          mark = qd.flatMap(_.mark).orElse(ext.flatMap(_.mark)),
-          change = qd.flatMap(_.netChange).orElse(reg.flatMap(_.regularMarketNetChange)),
-          percentChange = qd.flatMap(_.netPercentChange).orElse(reg.flatMap(_.regularMarketPercentChange)),
-          fiftyTwoWeekHigh = qd.flatMap(_.`52WeekHigh`),
-          fiftyTwoWeekLow = qd.flatMap(_.`52WeekLow`),
-          openInterest = qd.flatMap(_.openInterest),
-          volatility = qd.flatMap(_.volatility),
-          moneyIntrinsicValue = qd.flatMap(_.moneyIntrinsicValue),
-          timeValue = qd.flatMap(_.timeValue),
-          delta = qd.flatMap(_.delta),
-          gamma = qd.flatMap(_.gamma),
-          theta = qd.flatMap(_.theta),
-          vega = qd.flatMap(_.vega),
-          rho = qd.flatMap(_.rho),
-          theoreticalOptionValue = qd.flatMap(_.theoreticalOptionValue),
-          underlyingPrice = qd.flatMap(_.underlyingPrice)
-        )
-      }
+      simplifiedQuotes = response.map { case (symbol, qr) => symbol -> toQuote(symbol, qr) }
     } yield simplifiedQuotes
   }
   

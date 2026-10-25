@@ -24,6 +24,22 @@ trait MarketDataService {
     fields: Option[String] = None,
     indicative: Boolean = false
   ): Task[Map[String, Quote]]
+
+  /**
+   * Get quotes for multiple symbols, keeping a mixed response intact.
+   * GET /quotes
+   *
+   * Schwab answers a partially-bad symbol list with the good quotes plus an
+   * "errors": {"invalidSymbols": [...]} object. [[getQuotes]] cannot decode that
+   * and loses the whole batch; this returns the good quotes and names the rejects.
+   *
+   * @return quotes that came back, and the symbols Schwab rejected
+   */
+  def getQuotesDetailed(
+    symbols: List[String],
+    fields: Option[String] = None,
+    indicative: Boolean = false
+  ): Task[QuotesResult]
   
   /**
    * Get quote for a single symbol
@@ -184,6 +200,13 @@ object MarketDataService {
     indicative: Boolean = false
   ): ZIO[MarketDataService, Throwable, Map[String, Quote]] =
     ZIO.serviceWithZIO[MarketDataService](_.getQuotes(symbols, fields, indicative))
+
+  def getQuotesDetailed(
+    symbols: List[String],
+    fields: Option[String] = None,
+    indicative: Boolean = false
+  ): ZIO[MarketDataService, Throwable, QuotesResult] =
+    ZIO.serviceWithZIO[MarketDataService](_.getQuotesDetailed(symbols, fields, indicative))
     
   def getQuote(
     symbol: String,
