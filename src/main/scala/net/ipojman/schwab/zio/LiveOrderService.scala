@@ -90,49 +90,61 @@ case class LiveOrderService(client: SchwabClient) extends OrderService {
     } yield response
   }
   
+  // Trading endpoints take a token from the OAuth authorization code flow; a client credentials token is refused.
+  private def tradingToken: Task[TokenResponse] = client match {
+    case seamless: SeamlessSchwabClient => seamless.ensureAuthenticated()
+    case _ => ZIO.fail(new RuntimeException("Trading endpoints require SeamlessSchwabClient with OAuth authorization"))
+  }
+
+  // The three write calls below are each sent once. None of them retries, on any error.
+
   override def placeOrder(
     accountNumber: String,
     order: OrderRequest
   ): Task[Long] = {
     for {
-      token <- client match {
-        case seamless: SeamlessSchwabClient => seamless.ensureAuthenticated()
-        case _ => ZIO.fail(new RuntimeException("Trading endpoints require SeamlessSchwabClient with OAuth authorization"))
-      }
-      // For POST requests, we need to implement a new method in SchwabClient
-      // For now, we'll return a placeholder
-      _ <- ZIO.fail(new NotImplementedError("POST requests not yet implemented in SchwabClient"))
-    } yield 0L
+      token    <- tradingToken
+      response <- client.makeWriteApiCall(
+                    Method.POST,
+                    s"$baseEndpoint/accounts/$accountNumber/orders",
+                    token.access_token,
+                    Some(order.toJson)
+                  )
+      orderId  <- LiveOrderService.orderIdFrom(response).someOrFail(
+                    new OrderIdNotReturned(response.status, response.location, response.body)
+                  )
+    } yield orderId
   }
-  
+
   override def replaceOrder(
     accountNumber: String,
     orderId: Long,
     order: OrderRequest
-  ): Task[Long] = {
+  ): Task[Option[Long]] = {
     for {
-      token <- client match {
-        case seamless: SeamlessSchwabClient => seamless.ensureAuthenticated()
-        case _ => ZIO.fail(new RuntimeException("Trading endpoints require SeamlessSchwabClient with OAuth authorization"))
-      }
-      // For PUT requests, we need to implement a new method in SchwabClient
-      // For now, we'll return a placeholder
-      _ <- ZIO.fail(new NotImplementedError("PUT requests not yet implemented in SchwabClient"))
-    } yield 0L
+      token    <- tradingToken
+      response <- client.makeWriteApiCall(
+                    Method.PUT,
+                    s"$baseEndpoint/accounts/$accountNumber/orders/$orderId",
+                    token.access_token,
+                    Some(order.toJson)
+                  )
+      newId    <- LiveOrderService.orderIdFrom(response)
+    } yield newId
   }
-  
+
   override def cancelOrder(
     accountNumber: String,
     orderId: Long
   ): Task[Unit] = {
     for {
-      token <- client match {
-        case seamless: SeamlessSchwabClient => seamless.ensureAuthenticated()
-        case _ => ZIO.fail(new RuntimeException("Trading endpoints require SeamlessSchwabClient with OAuth authorization"))
-      }
-      // For DELETE requests, we need to implement a new method in SchwabClient
-      // For now, we'll return a placeholder
-      _ <- ZIO.fail(new NotImplementedError("DELETE requests not yet implemented in SchwabClient"))
+      token <- tradingToken
+      _     <- client.makeWriteApiCall(
+                 Method.DELETE,
+                 s"$baseEndpoint/accounts/$accountNumber/orders/$orderId",
+                 token.access_token,
+                 None
+               )
     } yield ()
   }
 }
@@ -140,4 +152,20 @@ case class LiveOrderService(client: SchwabClient) extends OrderService {
 object LiveOrderService {
   val layer: ZLayer[SchwabClient, Nothing, OrderService] =
     ZLayer.fromFunction(LiveOrderService(_))
+
+  /**
+   * The order id named by a write reply's Location header, which ends in /orders/{orderId}.
+   * None when there is no Location header. Fails with [[OrderIdNotReturned]] when the header
+   * is there but its last path segment is not a number.
+   */
+  def orderIdFrom(response: ApiWriteResponse): Task[Option[Long]] =
+    response.location match {
+      case None => ZIO.none
+      case Some(location) =>
+        val lastSegment = location.takeWhile(c => c != '?' && c != '#').split('/').filter(_.nonEmpty).lastOption
+        lastSegment.flatMap(_.toLongOption) match {
+          case Some(id) => ZIO.some(id)
+          case None     => ZIO.fail(new OrderIdNotReturned(response.status, response.location, response.body))
+        }
+    }
 }

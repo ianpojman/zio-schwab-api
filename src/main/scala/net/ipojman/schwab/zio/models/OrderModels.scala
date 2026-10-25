@@ -218,14 +218,14 @@ case class OrderRequest(
   complexOrderStrategyType: String = "NONE",
   quantity: Double,
   requestedDestination: Option[String] = None,
-  stopPrice: Option[Double] = None,
+  stopPrice: Option[BigDecimal] = None,
   stopPriceLinkBasis: Option[String] = None,
   stopPriceLinkType: Option[String] = None,
   stopPriceOffset: Option[Double] = None,
   stopType: Option[String] = None,
   priceLinkBasis: Option[String] = None,
   priceLinkType: Option[String] = None,
-  price: Option[Double] = None,
+  price: Option[BigDecimal] = None,
   taxLotMethod: Option[String] = None,
   orderLegCollection: List[OrderLegRequest],
   activationPrice: Option[Double] = None,
@@ -238,6 +238,15 @@ case class OrderRequest(
 object OrderRequest {
   implicit val zonedDateTimeDecoder: JsonDecoder[ZonedDateTime] = Order.zonedDateTimeDecoder
   implicit val zonedDateTimeEncoder: JsonEncoder[ZonedDateTime] = Order.zonedDateTimeEncoder
+
+  // price and stopPrice go to the API as decimal strings, such as "101.25"; reading one
+  // back accepts a string or a number.
+  private implicit val decimalStringEncoder: JsonEncoder[BigDecimal] =
+    JsonEncoder[String].contramap(_.bigDecimal.toPlainString)
+  private implicit val decimalStringDecoder: JsonDecoder[BigDecimal] =
+    JsonDecoder[String]
+      .mapOrFail(s => scala.util.Try(BigDecimal(s)).toEither.left.map(_ => s"Not a decimal: $s"))
+      .orElse(JsonDecoder.scalaBigDecimal)
   
   implicit val decoder: JsonDecoder[OrderRequest] = DeriveJsonDecoder.gen[OrderRequest]
   implicit val encoder: JsonEncoder[OrderRequest] = DeriveJsonEncoder.gen[OrderRequest]
