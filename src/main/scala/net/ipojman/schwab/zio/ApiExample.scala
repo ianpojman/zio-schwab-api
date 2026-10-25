@@ -29,7 +29,7 @@ object ApiExample extends ZIOAppDefault {
 
     // Extract the code from the callback URL using our specialized extractor
     code         <- ZIO.succeed(AuthCodeExtractor.extractCode(callbackUrl))
-    _            <- ZIO.logDebug(s"Extracted authorization code (truncated): ${code.take(5)}...")
+    _            <- ZIO.logDebug("Extracted the authorization code")
 
     // Step 3: Get the initial access token using the authorization code
     tokenResponse <- SchwabClient.getToken(code)

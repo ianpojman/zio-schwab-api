@@ -205,7 +205,7 @@ object ApiExampleWithServer extends ZIOAppDefault {
                  .orElseFail(new RuntimeException("Failed to get token"))
 
       _ <- Console.printLine(s"\n[Schwab API] Successfully authenticated!")
-      _ <- Console.printLine(s"[Schwab API] Token details: ${token}")
+      _ <- Console.printLine("[Schwab API] Token received (not shown)")
 
       // Make API call
       _           <- Console.printLine("\n[Schwab API] Making test API call to accounts endpoint...")

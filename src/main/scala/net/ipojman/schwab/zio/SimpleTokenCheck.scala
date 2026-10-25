@@ -17,13 +17,13 @@ object SimpleTokenCheck extends ZIOAppDefault {
         case Some(token) =>
           for {
             _ <- Console.printLine(s"\n✓ Token found via FileTokenStorage")
-            _ <- Console.printLine(s"  Access token: ${token.access_token.take(20)}...")
+            _ <- Console.printLine("  Access token: present (not shown)")
             _ <- Console.printLine(s"  Has refresh token: ${token.refresh_token.isDefined}")
             
             // The other app might expect just the TokenResponse, not wrapped
             // Let's create a file with just the token
             legacyFormat = token.toJson
-            _ <- Console.printLine(s"\nToken in legacy format:\n$legacyFormat")
+            _ <- Console.printLine(s"\nToken in legacy format: ${legacyFormat.length} characters (not shown)")
             
           } yield ()
         case None =>

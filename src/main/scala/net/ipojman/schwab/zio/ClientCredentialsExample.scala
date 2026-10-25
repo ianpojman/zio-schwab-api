@@ -19,8 +19,7 @@ object ClientCredentialsExample extends ZIOAppDefault {
     // Get the access token using client credentials
     _            <- Console.printLine("[Schwab API] Getting access token via client credentials...")
     tokenResponse <- SchwabClient.getAccessToken
-    _            <- Console.printLine(s"[Schwab API] Access Token: ${tokenResponse.access_token.take(10)}... (truncated)")
-    _            <- ZIO.logDebug(s"Full access token: ${tokenResponse.access_token}")
+    _            <- Console.printLine("[Schwab API] Access token received (not shown)")
     _            <- ZIO.logDebug(s"Token expires in: ${tokenResponse.expires_in.getOrElse("unknown")} seconds")
 
     // Make an API call using the access token

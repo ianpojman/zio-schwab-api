@@ -168,7 +168,7 @@ object SchwabHttpsServerComplete extends ZIOAppDefault {
       Method.GET / "api" / "oauth" / "callback" ->
         handler { (req: Request) =>
           for {
-            _ <- ZIO.logDebug(s"Received OAuth callback: ${req.url}")
+            _ <- ZIO.logDebug("Received OAuth callback")
             codeParam = req.url.queryParams.getAll("code").headOption.getOrElse(sys.error("Code not found"))
             tokenResponse <- SchwabClient.getToken(codeParam)
             _ <- TokenRepository.storeToken(tokenResponse)

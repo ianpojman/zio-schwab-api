@@ -90,7 +90,7 @@ case class ApiWriteResponse(status: Int, location: Option[String], body: String)
  * A non-2xx reply from the Schwab API, with its status code and body.
  */
 class SchwabHttpError(val status: Int, val url: String, val body: String)
-  extends RuntimeException(s"API error: $status for URL: $url - Response body: $body")
+  extends RuntimeException(s"API error: $status for URL: ${LiveSchwabClient.maskAccount(url)} - Response body: $body")
 
 object SchwabClient {
   def authorize: ZIO[SchwabClient, Throwable, String] =
@@ -159,14 +159,13 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
       .addHeader(Header.Authorization.Basic(config.clientId, config.clientSecret))
 
     for {
-      _         <- ZIO.logDebug(s"Getting token with code: $code")
+      _         <- ZIO.logDebug("Exchanging an authorization code for a token")
       response  <- client.request(request).provide(ZLayer.succeed(Scope.global))
       _         <- ZIO.logDebug(s"Token response status: ${response.status}")
       bodyStr   <- response.body.asString
-      _         <- ZIO.logInfo(s"Token response body: $bodyStr")
       tokenResp <- ZIO.fromEither(bodyStr.fromJson[TokenResponse])
         .mapError(err => new RuntimeException(s"Failed to parse token response: $err"))
-        .tapError(err => ZIO.logError(s"Failed to parse token response while parsing response body: \n---\n$bodyStr\n---\n$err"))
+        .tapError(err => ZIO.logError(err.getMessage))
     } yield tokenResp
   }
 
@@ -188,7 +187,6 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
       response  <- client.request(request).provide(ZLayer.succeed(Scope.global))
       _         <- ZIO.logDebug(s"Refresh token response status: ${response.status}")
       bodyStr   <- response.body.asString
-      _         <- ZIO.logTrace(s"Refresh token response body: $bodyStr")
       tokenResp <- ZIO.fromEither(bodyStr.fromJson[TokenResponse])
         .mapError(err => new RuntimeException(s"Failed to parse token response: $err"))
     } yield tokenResp
@@ -211,7 +209,6 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
       response  <- client.request(request).provide(ZLayer.succeed(Scope.global))
       _         <- ZIO.logDebug(s"Access token response status: ${response.status}")
       bodyStr   <- response.body.asString
-      _         <- ZIO.logTrace(s"Access token response body: $bodyStr")
       tokenResp <- ZIO.fromEither(bodyStr.fromJson[TokenResponse])
         .mapError(err => new RuntimeException(s"Failed to parse token response: $err"))
     } yield tokenResp
@@ -253,19 +250,19 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
       .addHeader(Header.Authorization.Bearer(accessToken))
 
     for {
-      _        <- ZIO.logDebug(s"Making Schwab API call: $fullUrl")
+      _        <- ZIO.logDebug(s"Making Schwab API call: ${LiveSchwabClient.maskAccount(fullUrl)}")
       response <- client.request(request).provide(ZLayer.succeed(Scope.global))
       _        <- ZIO.logDebug(s"API response status: ${response.status}")
       body     <- response.body.asString
       _        <- ZIO.when(response.status.isError)(
         if (response.status.code == 401) {
-          ZIO.logError(s"Authentication error (401) for URL: $fullUrl - Token may be expired")
+          ZIO.logError(s"Authentication error (401) for URL: ${LiveSchwabClient.maskAccount(fullUrl)} - Token may be expired")
         } else {
-          ZIO.logError(s"API error: ${response.status} for URL: $fullUrl - Response body: $body")
+          ZIO.logError(s"API error: ${response.status} for URL: ${LiveSchwabClient.maskAccount(fullUrl)} - Response body: $body")
         }
       )
       _        <- ZIO.logTrace(s"API response body: $body")
-      _        <- ZIO.fail(new RuntimeException(s"API error: ${response.status} for URL: $fullUrl - Response body: $body"))
+      _        <- ZIO.fail(new RuntimeException(s"API error: ${response.status} for URL: ${LiveSchwabClient.maskAccount(fullUrl)} - Response body: $body"))
         .when(response.status.isError)
     } yield body
   }
@@ -283,7 +280,7 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
     val fullUrl = s"${config.apiBaseUrl}/${endpoint.stripPrefix("/")}"
     for {
       request  <- LiveSchwabClient.writeRequest(method, fullUrl, accessToken, jsonBody)
-      _        <- ZIO.logDebug(s"Making Schwab API write call: $method $fullUrl")
+      _        <- ZIO.logDebug(s"Making Schwab API write call: $method ${LiveSchwabClient.maskAccount(fullUrl)}")
       response <- client.request(request).provide(ZLayer.succeed(Scope.global))
       result   <- LiveSchwabClient.readWriteResponse(fullUrl, response)
     } yield result
@@ -291,6 +288,12 @@ case class LiveSchwabClient(config: SchwabApiConfig, client: Client) extends Sch
 }
 
 object LiveSchwabClient {
+
+  /**
+   * `url` with the path segment after `accounts/` replaced by a fixed mask, for log lines. On the trader paths that
+   * segment is the account hash, which identifies the account and does not belong in a log.
+   */
+  def maskAccount(url: String): String = url.replaceAll("(/accounts/)[^/?#]+", "$1***")
 
   /** Build the request for a write call: bearer token, and a JSON body when there is one. */
   def writeRequest(method: Method, fullUrl: String, accessToken: String, jsonBody: Option[String]): Task[Request] =
@@ -310,7 +313,7 @@ object LiveSchwabClient {
     for {
       body <- response.body.asString
       _    <- ZIO.when(!response.status.isSuccess)(
-                ZIO.logError(s"API error: ${response.status.code} for URL: $fullUrl - Response body: $body") *>
+                ZIO.logError(s"API error: ${response.status.code} for URL: ${maskAccount(fullUrl)} - Response body: $body") *>
                 ZIO.fail(new SchwabHttpError(response.status.code, fullUrl, body))
               )
     } yield ApiWriteResponse(response.status.code, response.rawHeader("Location"), body)
