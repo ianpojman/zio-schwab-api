@@ -1,4 +1,4 @@
-ThisBuild / version := "0.0.2-SNAPSHOT"
+ThisBuild / version := "0.0.2"
 
 ThisBuild / scalaVersion := "3.6.4"
 ThisBuild / organization := "com.github.zio-schwab-api"
