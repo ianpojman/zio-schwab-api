@@ -418,3 +418,6 @@ website/static/api
 
 # Claude Code
 .claude/
+
+# Keystores: the local callback server makes its own at first start
+*.p12
